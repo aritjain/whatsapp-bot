@@ -1,0 +1,773 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>JMS India — Sale Register Courier Tracker</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>📦</text></svg>"/>
+<!-- Vendored locally: no CDN dependency, works offline and on locked-down networks -->
+<script src="/vendor/xlsx.full.min.js"></script>
+<script src="/vendor/qrcode.min.js"></script>
+<style>
+:root{
+  --blue:#1B3A8F; --blue2:#2550C0; --blue3:#3D6EE8;
+  --bg:#F0F4FF; --card:#fff; --border:#D0D9F0;
+  --green:#1a7a3c; --green-bg:#e6f4ec;
+  --orange:#b76000; --orange-bg:#fff3cd;
+  --red:#c0392b; --red-bg:#fdecea;
+  --text:#1a1a2e; --sub:#555e7a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',Arial,sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+.header{background:linear-gradient(135deg,var(--blue) 0%,var(--blue2) 60%,var(--blue3) 100%);box-shadow:0 2px 12px rgba(27,58,143,.25)}
+.header-inner{max-width:1360px;margin:0 auto;display:flex;align-items:center;gap:18px;padding:14px 24px}
+.header-logo{height:56px;width:56px;object-fit:contain;border-radius:8px;background:#fff;padding:4px}
+.header-name{color:#fff;font-size:1.25rem;font-weight:700;letter-spacing:.5px}
+.header-sub{color:rgba(255,255,255,.75);font-size:.72rem;letter-spacing:1.5px;text-transform:uppercase;margin-top:2px}
+.header-title{color:#fff;font-size:1rem;font-weight:400;opacity:.85;margin-top:3px}
+.header-right{margin-left:auto;display:flex;align-items:center;gap:12px}
+.badge{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;padding:4px 12px;border-radius:20px;font-size:.75rem;font-weight:600}
+#btnLogout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.35);color:#fff;padding:6px 16px;border-radius:6px;cursor:pointer;font-size:.8rem}
+#btnLogout:hover{background:rgba(255,255,255,.28)}
+
+#loginPage{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#e8eeff 0%,#f0f4ff 50%,#e0e8ff 100%)}
+.login-card{background:#fff;border-radius:16px;box-shadow:0 8px 40px rgba(27,58,143,.15);padding:48px 40px;width:100%;max-width:420px;text-align:center}
+.login-logo{height:72px;object-fit:contain;margin-bottom:20px}
+.login-title{font-size:1.4rem;font-weight:700;color:var(--blue);margin-bottom:22px}
+.login-field{width:100%;padding:12px 16px;border:1.5px solid var(--border);border-radius:8px;font-size:1rem;outline:none;text-align:center;letter-spacing:4px;font-weight:600}
+.login-field:focus{border-color:var(--blue2)}
+.login-hint{font-size:.78rem;color:var(--sub);margin-top:6px;margin-bottom:20px}
+.btn-login{width:100%;background:linear-gradient(135deg,var(--blue),var(--blue2));color:#fff;border:none;padding:13px;border-radius:8px;font-size:1rem;font-weight:600;cursor:pointer}
+.btn-login:hover{opacity:.88}
+.btn-login:disabled{opacity:.5;cursor:not-allowed}
+.login-err{color:#c0392b;font-size:.84rem;margin-top:12px;min-height:20px}
+.login-setup-link{margin-top:24px;font-size:.8rem;color:var(--sub)}
+.login-setup-link a{color:var(--blue2);cursor:pointer;text-decoration:underline}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000}
+.modal-card{background:#fff;border-radius:14px;padding:36px 32px;max-width:400px;width:90%;text-align:center;max-height:90vh;overflow:auto}
+.modal-card h3{color:var(--blue);margin-bottom:8px;font-size:1.1rem}
+.modal-card p{color:var(--sub);font-size:.85rem;margin-bottom:20px}
+.modal-secret{font-family:monospace;background:#f5f5f5;padding:8px 12px;border-radius:6px;word-break:break-all}
+.modal-close{background:var(--blue);color:#fff;border:none;padding:9px 24px;border-radius:6px;cursor:pointer;font-size:.9rem}
+.pw-field{width:100%;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:.95rem;outline:none;margin-bottom:12px}
+
+#app{display:none}
+.container{max-width:1360px;margin:0 auto;padding:24px}
+.upload-zone{border:2.5px dashed var(--blue3);border-radius:12px;padding:40px;text-align:center;cursor:pointer;background:#fff;margin-bottom:20px;transition:padding .2s}
+.upload-zone:hover,.upload-zone.drag{border-color:var(--blue);background:#f0f4ff}
+.upload-zone .upload-icon{font-size:2.5rem;margin-bottom:12px}
+.upload-zone .upload-title{font-size:1rem;font-weight:600;color:var(--blue);margin-bottom:4px}
+.upload-zone .upload-hint{font-size:.82rem;color:var(--sub)}
+/* Once a register is loaded the dropzone collapses to a one-line strip so the
+   table gets the vertical space. */
+.upload-zone.compact{padding:10px 18px;margin-bottom:14px;display:flex;align-items:center;gap:10px;text-align:left}
+.upload-zone.compact .upload-icon{font-size:1.1rem;margin:0}
+.upload-zone.compact .upload-title{font-size:.85rem;margin:0}
+.upload-zone.compact .upload-hint{font-size:.78rem;margin-left:auto}
+#fileInput{display:none}
+
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:14px}
+.btn{padding:9px 20px;border-radius:7px;border:none;cursor:pointer;font-size:.88rem;font-weight:600;display:inline-flex;align-items:center;gap:6px}
+.btn-primary{background:linear-gradient(135deg,var(--blue),var(--blue2));color:#fff}
+.btn-primary:hover{opacity:.88}
+.btn-primary:disabled{opacity:.45;cursor:not-allowed}
+.btn-success{background:#1a7a3c;color:#fff}
+.btn-success:disabled{opacity:.45;cursor:not-allowed}
+.btn-outline{background:#fff;color:var(--blue);border:1.5px solid var(--blue3)}
+.btn-danger{background:#c0392b;color:#fff}
+
+#searchBox{flex:1;min-width:220px;padding:9px 14px;border:1.5px solid var(--border);border-radius:7px;font-size:.88rem;outline:none;background:#fff}
+#searchBox:focus{border-color:var(--blue2)}
+
+.progress-wrap{background:#e8eeff;border-radius:8px;height:8px;margin-bottom:16px;overflow:hidden}
+.progress-bar{background:linear-gradient(90deg,var(--blue),var(--blue3));height:100%;width:0;transition:width .3s;border-radius:8px}
+.progress-text{font-size:.82rem;color:var(--sub);margin-bottom:8px}
+
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.chip{padding:5px 14px;border-radius:20px;font-size:.8rem;font-weight:600;cursor:pointer;border:1.5px solid transparent;background:#e6ecfb;color:var(--blue)}
+.chip.off{opacity:.4}
+.chip[data-mode="offline"]{background:#eee;color:#666}
+.pill{padding:5px 14px;border-radius:20px;font-size:.8rem;font-weight:600}
+.pill-blue{background:#dce8ff;color:var(--blue)}
+.pill-green{background:var(--green-bg);color:var(--green)}
+.pill-orange{background:var(--orange-bg);color:var(--orange)}
+.pill-red{background:var(--red-bg);color:var(--red)}
+.pill-grey{background:#f0f0f0;color:#666}
+
+.table-wrap{overflow:auto;max-height:70vh;border-radius:10px;box-shadow:0 2px 12px rgba(27,58,143,.08);background:#fff}
+table{width:100%;border-collapse:collapse;font-size:.83rem}
+thead th{background:var(--blue);color:#fff;padding:10px 12px;text-align:left;font-weight:600;white-space:nowrap;position:sticky;top:0;z-index:2}
+thead th.col-status{background:linear-gradient(135deg,#1a7a3c,#256835)}
+thead th.col-pod{background:linear-gradient(135deg,#b76000,#9c5700)}
+tbody tr:nth-child(even){background:#f7f9ff}
+tbody tr:hover{background:#eef2ff}
+td{padding:8px 12px;border-bottom:1px solid var(--border);vertical-align:middle;white-space:nowrap}
+td.sn{color:var(--sub);font-size:.78rem;text-align:center}
+td.wrap{white-space:normal;min-width:170px}
+.status-badge{display:inline-block;padding:3px 10px;border-radius:12px;font-size:.75rem;font-weight:600;white-space:nowrap;max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.s-delivered{background:var(--green-bg);color:var(--green)}
+.s-intransit{background:#e0f0ff;color:#1a5a9c}
+.s-outdelivery{background:var(--orange-bg);color:var(--orange)}
+.s-pending{background:#f0f0f0;color:#666}
+.s-error{background:var(--red-bg);color:var(--red)}
+.s-offline{background:#ede7f6;color:#5e35b1}
+.s-link{background:#e8f0fe;color:#1558b0}
+.btn-pod{padding:4px 10px;border-radius:5px;font-size:.75rem;cursor:pointer;border:none;font-weight:600;background:var(--blue);color:#fff;text-decoration:none;display:inline-block}
+.btn-pod:hover{background:var(--blue2)}
+.btn-pod-dl{background:var(--green);margin-left:4px}
+.muted{color:#aaa;font-size:.78rem}
+
+#podModal{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:2000;display:none;align-items:center;justify-content:center}
+#podModal.show{display:flex}
+.pod-card{background:#fff;border-radius:12px;padding:24px;max-width:90vw;max-height:90vh;display:flex;flex-direction:column;gap:12px}
+.pod-card h3{color:var(--blue);font-size:1rem}
+.pod-card img{max-width:100%;max-height:65vh;object-fit:contain;border:1px solid var(--border);border-radius:6px}
+.pod-actions{display:flex;gap:8px;justify-content:flex-end}
+.empty-state{text-align:center;padding:60px 20px;color:var(--sub)}
+.empty-state .icon{font-size:3rem;margin-bottom:12px}
+@media(max-width:700px){.header-inner{padding:12px 14px}.container{padding:14px}}
+</style>
+</head>
+<body>
+
+<!-- ══ LOGIN ══ -->
+<div id="loginPage">
+  <div class="login-card">
+    <img src="/logo.jpg" class="login-logo" alt="JMS India"/>
+    <div class="login-title">JMS India — Courier Tracker</div>
+    <div style="display:flex;border:1.5px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:22px">
+      <button id="tabAuth" data-tab="auth" style="flex:1;padding:9px;border:none;cursor:pointer;font-size:.84rem;font-weight:600;background:var(--blue);color:#fff">🔐 Authenticator</button>
+      <button id="tabKey" data-tab="key" style="flex:1;padding:9px;border:none;cursor:pointer;font-size:.84rem;font-weight:600;background:#f5f7ff;color:var(--sub)">🔑 Access Key</button>
+    </div>
+    <div id="loginAuthTab">
+      <input id="totpInput" class="login-field" type="text" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code"/>
+      <div class="login-hint">Enter the 6-digit code from your authenticator app</div>
+    </div>
+    <div id="loginKeyTab" style="display:none">
+      <input id="keyInput" class="login-field" type="password" maxlength="30" placeholder="Enter access key" style="letter-spacing:3px"/>
+      <div class="login-hint">Permanent access key (never expires)</div>
+    </div>
+    <button class="btn-login" id="btnLogin">Login</button>
+    <div class="login-err" id="loginErr"></div>
+    <div class="login-setup-link">First time? <a id="lnkSetup">Setup / View Keys</a></div>
+  </div>
+</div>
+
+<!-- Setup modal -->
+<div class="modal-overlay" id="setupModal" style="display:none">
+  <div class="modal-card">
+    <div id="setupStep1">
+      <h3>🔐 Admin Access Required</h3>
+      <p>Enter the admin password to view the access credentials</p>
+      <input class="pw-field" id="adminPwInput" type="password" placeholder="Admin password"/>
+      <button class="btn-login" id="btnAdminPw">Verify</button>
+      <div class="login-err" id="setupErr"></div>
+      <br/><button class="modal-close" style="margin-top:12px;background:#888" data-close-setup>Cancel</button>
+    </div>
+    <div id="setupStep2" style="display:none">
+      <h3>🔑 Your Access Credentials</h3>
+      <div style="background:#fff8e1;border:1.5px solid #f0c040;border-radius:8px;padding:12px;margin-bottom:16px;text-align:left;font-size:.8rem;color:#7a5a00">
+        ⚠️ Keep these private. Do not share or screenshot this screen.
+      </div>
+      <div style="text-align:left;margin-bottom:6px;font-size:.82rem;font-weight:600;color:var(--blue)">🔑 Permanent Access Key</div>
+      <div id="staticKeyDisplay" style="cursor:pointer;font-family:monospace;font-size:1rem;letter-spacing:3px;font-weight:700;padding:12px;background:#f0f4ff;border:1.5px solid var(--blue);border-radius:8px;margin-bottom:18px;text-align:center"></div>
+      <div style="text-align:left;margin-bottom:6px;font-size:.82rem;font-weight:600;color:var(--blue)">📱 Authenticator Setup Key</div>
+      <div class="modal-secret" id="secretDisplay" style="cursor:pointer;font-size:.82rem;margin-bottom:10px"></div>
+      <div id="qrContainer" style="display:flex;justify-content:center;margin-bottom:16px"></div>
+      <button class="modal-close" data-close-setup>Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ APP ══ -->
+<div id="app">
+  <div class="header">
+    <div class="header-inner">
+      <img src="/logo.jpg" class="header-logo" alt="JMS"/>
+      <div>
+        <div class="header-name">JMS India</div>
+        <div class="header-sub">Sale Register — Courier Tracking</div>
+        <div class="header-title">Docket Tracker &amp; POD</div>
+      </div>
+      <div class="header-right">
+        <span class="badge" id="carrierBadge">Multi-carrier</span>
+        <button id="btnLogout">Logout</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <div class="upload-zone" id="uploadZone">
+      <div class="upload-icon">📂</div>
+      <div class="upload-title" id="uploadTitle">Upload Sale Register (.xlsx)</div>
+      <div class="upload-hint" id="uploadHint">Drag &amp; drop or click — reads DOCKET NO and CARRIER NAME from the SaleRegister sheet</div>
+    </div>
+    <input type="file" id="fileInput" accept=".xlsx,.xls"/>
+
+    <div class="controls" id="controls" style="display:none">
+      <button class="btn btn-primary" id="btnTrack">▶ Track All</button>
+      <button class="btn btn-success" id="btnExcel" disabled>⬇ Download Report</button>
+      <button class="btn btn-outline" id="btnPODs" disabled>📎 Download All PODs</button>
+      <button class="btn btn-danger" id="btnClear">✕ Clear</button>
+      <input id="searchBox" type="search" placeholder="Search invoice no, docket no or buyer name…"/>
+    </div>
+
+    <div id="progressArea" style="display:none">
+      <div class="progress-text" id="progressText">Tracking…</div>
+      <div class="progress-wrap"><div class="progress-bar" id="progressBar"></div></div>
+    </div>
+
+    <div class="chips" id="carrierChips" style="display:none"></div>
+    <div class="chips" id="statsRow" style="display:none"></div>
+
+    <div id="resultsArea" style="display:none">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Date</th>
+              <th>Invoice No</th>
+              <th>Buyer Name</th>
+              <th>State</th>
+              <th>Docket No</th>
+              <th>Docket Date</th>
+              <th>Carrier Name</th>
+              <th class="col-status">Status</th>
+              <th class="col-pod">POD</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody"></tbody>
+        </table>
+      </div>
+      <div class="progress-text" id="rowCount" style="margin-top:8px"></div>
+    </div>
+
+    <div class="empty-state" id="emptyState">
+      <div class="icon">📋</div>
+      <p>Upload your Sale Register to begin tracking</p>
+    </div>
+  </div>
+</div>
+
+<div id="podModal">
+  <div class="pod-card" id="podCard">
+    <h3 id="podModalTitle">POD</h3>
+    <img id="podModalImg" src="" alt="POD"/>
+    <div class="pod-actions">
+      <button class="btn btn-primary" id="btnPodDl">⬇ Download</button>
+      <button class="btn btn-outline" id="btnPodClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+'use strict';
+var $ = function(id){ return document.getElementById(id); };
+
+// ── STATE ──
+var JWT = localStorage.getItem('jms_jwt') || '';
+var rows = [];          // one entry per Sale Register line
+var results = {};       // trackKey -> tracking result
+var carrierFilter = null;
+var currentPod = { url:'', docket:'' };
+var BATCH = 25;
+
+var trackKey = function(r){ return r.docket + ' ' + r.carrier; };
+
+// ── LOGIN ──
+var loginTab = 'auth';
+function switchTab(t){
+  loginTab = t;
+  $('loginAuthTab').style.display = t==='auth' ? 'block':'none';
+  $('loginKeyTab').style.display  = t==='key'  ? 'block':'none';
+  $('tabAuth').style.background = t==='auth' ? 'var(--blue)':'#f5f7ff';
+  $('tabAuth').style.color      = t==='auth' ? '#fff':'var(--sub)';
+  $('tabKey').style.background  = t==='key'  ? 'var(--blue)':'#f5f7ff';
+  $('tabKey').style.color       = t==='key'  ? '#fff':'var(--sub)';
+  $('loginErr').textContent='';
+}
+$('tabAuth').onclick = function(){ switchTab('auth'); };
+$('tabKey').onclick  = function(){ switchTab('key'); };
+
+function jwtExpired(t){
+  try { return Date.now()/1000 > JSON.parse(atob(t.split('.')[1])).exp; } catch(e){ return true; }
+}
+function checkAuth(){
+  var ok = JWT && !jwtExpired(JWT);
+  if(!ok){ JWT=''; localStorage.removeItem('jms_jwt'); }
+  $('loginPage').style.display = ok ? 'none':'flex';
+  $('app').style.display       = ok ? 'block':'none';
+}
+async function doLogin(){
+  var code = (loginTab==='auth' ? $('totpInput').value : $('keyInput').value).trim();
+  var btn = $('btnLogin'), err = $('loginErr');
+  if(!code){ err.textContent='Please enter your code or access key'; return; }
+  btn.disabled=true; btn.textContent='Verifying…'; err.textContent='';
+  try{
+    var res = await fetch('/api/auth/verify',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'verify', code:code })
+    });
+    var data = await res.json();
+    if(res.ok && data.token){ JWT=data.token; localStorage.setItem('jms_jwt',JWT); checkAuth(); }
+    else err.textContent = data.error || 'Login failed';
+  }catch(e){ err.textContent='Network error. Please retry.'; }
+  btn.disabled=false; btn.textContent='Login';
+}
+$('btnLogin').onclick = doLogin;
+$('totpInput').onkeydown = function(e){ if(e.key==='Enter') doLogin(); };
+$('keyInput').onkeydown  = function(e){ if(e.key==='Enter') doLogin(); };
+$('btnLogout').onclick = function(){
+  JWT=''; localStorage.removeItem('jms_jwt'); rows=[]; results={}; checkAuth();
+};
+
+// ── SETUP MODAL ──
+$('lnkSetup').onclick = function(){
+  $('setupModal').style.display='flex';
+  $('setupStep1').style.display='block';
+  $('setupStep2').style.display='none';
+  $('adminPwInput').value=''; $('setupErr').textContent='';
+};
+Array.prototype.forEach.call(document.querySelectorAll('[data-close-setup]'), function(b){
+  b.onclick = function(){ $('setupModal').style.display='none'; };
+});
+async function submitAdminPw(){
+  $('setupErr').textContent='';
+  try{
+    var res = await fetch('/api/auth/verify',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ action:'getSecret', password: $('adminPwInput').value })
+    });
+    var d = await res.json();
+    if(res.ok && d.secret){
+      $('setupStep1').style.display='none'; $('setupStep2').style.display='block';
+      $('secretDisplay').textContent = d.secret;
+      $('staticKeyDisplay').textContent = d.staticKey || '';
+      $('qrContainer').innerHTML='';
+      new QRCode($('qrContainer'), {
+        text:'otpauth://totp/JMS%20Courier%20Tracker?secret='+d.secret+'&issuer=JMS%20India&algorithm=SHA1&digits=6&period=30',
+        width:180, height:180, colorDark:'#1B3A8F', colorLight:'#ffffff', correctLevel:QRCode.CorrectLevel.M
+      });
+    } else $('setupErr').textContent = d.error || 'Incorrect password';
+  }catch(e){ $('setupErr').textContent='Network error'; }
+}
+$('btnAdminPw').onclick = submitAdminPw;
+$('adminPwInput').onkeydown = function(e){ if(e.key==='Enter') submitAdminPw(); };
+function copyOnClick(el){
+  el.onclick = function(){
+    var orig = el.textContent;
+    navigator.clipboard.writeText(orig).then(function(){
+      el.textContent='✅ Copied!';
+      setTimeout(function(){ el.textContent=orig; },1500);
+    });
+  };
+}
+copyOnClick($('secretDisplay')); copyOnClick($('staticKeyDisplay'));
+
+// ── FILE PARSING (SaleRegister_New) ──
+var norm = function(s){ return String(s==null?'':s).replace(/\s+/g,' ').trim().toLowerCase(); };
+
+// Header aliases — the Sale Register names first, older LR-POD names as fallback
+// so both workbook formats load without a code change.
+var FIELDS = {
+  date:       ['date'],
+  invoiceNo:  ['invoice no','invoice number','bill no'],
+  buyerCode:  ['buyer code','stockist code'],
+  name:       ['buyer name','bill to party name','ship to party name'],
+  state:      ['state','city'],
+  docket:     ['docket no','docket number','lrno','lr no','lr number'],
+  docketDate: ['docket date'],
+  carrier:    ['carrier name','transporter name','carrier']
+};
+
+function parseWorkbook(wb){
+  var out = [];
+  wb.SheetNames.forEach(function(sheetName){
+    var grid = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:'', raw:false, blankrows:true });
+
+    // Locate the header row: the one carrying both the docket and carrier columns.
+    var hIdx = -1;
+    for(var i=0;i<grid.length;i++){
+      var joined = grid[i].map(norm).join('|');
+      var hasDocket  = FIELDS.docket.some(function(a){ return joined.split('|').indexOf(a)>=0; });
+      var hasCarrier = FIELDS.carrier.some(function(a){ return joined.split('|').indexOf(a)>=0; });
+      if(hasDocket && hasCarrier){ hIdx=i; break; }
+    }
+    if(hIdx<0) return;
+
+    var head = grid[hIdx].map(norm);
+    var col = {};
+    Object.keys(FIELDS).forEach(function(f){
+      col[f] = -1;
+      FIELDS[f].some(function(alias){
+        var k = head.indexOf(alias);
+        if(k>=0){ col[f]=k; return true; }
+        return false;
+      });
+    });
+
+    for(var r=hIdx+1; r<grid.length; r++){
+      var g = grid[r];
+      var cell = function(f){ return col[f]>=0 ? String(g[col[f]]==null?'':g[col[f]]).trim() : ''; };
+      var invoiceNo = cell('invoiceNo');
+      var docket = cell('docket');
+      // Skips the merged sub-header row, blank spacers and the trailing Total row.
+      if(!invoiceNo && !docket) continue;
+      if(/^total$/i.test(cell('date')) || /^total$/i.test(invoiceNo)) continue;
+
+      out.push({
+        date: cell('date'),
+        invoiceNo: invoiceNo,
+        buyerCode: cell('buyerCode'),
+        name: cell('name'),
+        state: cell('state'),
+        docket: docket,
+        docketDate: cell('docketDate'),
+        carrier: cell('carrier').replace(/\s+/g,' ').trim(),
+        sheet: sheetName
+      });
+    }
+  });
+  return out;
+}
+
+function handleFile(file){
+  var reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      var wb = XLSX.read(e.target.result, { type:'array' });
+      var parsed = parseWorkbook(wb);
+      if(!parsed.length){ alert('No DOCKET NO / CARRIER NAME columns found in this workbook.'); return; }
+      rows = parsed; results = {}; carrierFilter = null;
+      $('uploadZone').classList.add('compact');
+      $('uploadTitle').textContent = '📄 '+file.name;
+      $('uploadHint').textContent = 'Click to load a different register';
+      $('controls').style.display='flex';
+      $('emptyState').style.display='none';
+      $('btnExcel').disabled = true;
+      $('btnPODs').disabled = true;
+      $('statsRow').style.display='none';
+      renderCarrierChips();
+      render();
+      $('carrierBadge').textContent = rows.length + ' lines · ' + uniqueShipments().length + ' dockets';
+    }catch(ex){ alert('Error reading file: '+ex.message); }
+  };
+  reader.readAsArrayBuffer(file);
+}
+$('uploadZone').onclick = function(){ $('fileInput').click(); };
+$('uploadZone').ondragover = function(e){ e.preventDefault(); this.classList.add('drag'); };
+$('uploadZone').ondragleave = function(){ this.classList.remove('drag'); };
+$('uploadZone').ondrop = function(e){
+  e.preventDefault(); this.classList.remove('drag');
+  if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+};
+$('fileInput').onchange = function(){ if(this.files[0]) handleFile(this.files[0]); };
+
+// ── CARRIER SUMMARY / FILTER ──
+function carrierCounts(){
+  var m = {};
+  rows.forEach(function(r){
+    var k = r.carrier || '(no carrier)';
+    m[k] = (m[k]||0)+1;
+  });
+  return Object.keys(m).sort(function(a,b){ return m[b]-m[a]; }).map(function(k){ return {name:k, n:m[k]}; });
+}
+function renderCarrierChips(){
+  var wrap = $('carrierChips');
+  wrap.innerHTML=''; wrap.style.display='flex';
+  carrierCounts().forEach(function(c){
+    var el = document.createElement('span');
+    el.className = 'chip' + (carrierFilter && carrierFilter!==c.name ? ' off':'');
+    if(/jms\s*trading/i.test(c.name)) el.setAttribute('data-mode','offline');
+    el.textContent = c.name + ' · ' + c.n;
+    el.onclick = function(){
+      carrierFilter = (carrierFilter===c.name) ? null : c.name;
+      renderCarrierChips(); render();
+    };
+    wrap.appendChild(el);
+  });
+}
+
+// ── TABLE ──
+function statusInfo(res){
+  if(!res) return { cls:'s-pending', text:'Pending' };
+  if(res.success === false) return { cls:'s-error', text:'Error: '+(res.error||'Failed') };
+  var t = res.currentStatus || '—';
+  if(res.mode === 'offline') return { cls:'s-offline', text:t };
+  if(res.linkOnly)           return { cls:'s-link', text:t };
+  if(/delivered|delivery done|pod\s*upload/i.test(t)) return { cls:'s-delivered', text:t };
+  if(/out for delivery/i.test(t))                    return { cls:'s-outdelivery', text:t };
+  if(/transit|forwarded|booked|scanned|received|dispatch|manifest|pickup/i.test(t)) return { cls:'s-intransit', text:t };
+  return { cls:'s-pending', text:t };
+}
+
+function visibleRows(){
+  var q = norm($('searchBox').value);
+  return rows.filter(function(r){
+    if(carrierFilter && (r.carrier||'(no carrier)') !== carrierFilter) return false;
+    if(!q) return true;
+    return norm(r.invoiceNo).indexOf(q)>=0 ||
+           norm(r.docket).indexOf(q)>=0 ||
+           norm(r.name).indexOf(q)>=0;
+  });
+}
+
+function td(text, cls){
+  var c = document.createElement('td');
+  if(cls) c.className = cls;
+  c.textContent = text == null || text === '' ? '—' : String(text);
+  return c;
+}
+
+function render(){
+  var body = $('resultsBody');
+  body.innerHTML='';
+  var list = visibleRows();
+  var frag = document.createDocumentFragment();
+
+  list.forEach(function(r, i){
+    var res = results[trackKey(r)];
+    var tr = document.createElement('tr');
+    tr.appendChild(td(i+1,'sn'));
+    tr.appendChild(td(r.date));
+    tr.appendChild(td(r.invoiceNo));
+    tr.appendChild(td(r.name,'wrap'));
+    tr.appendChild(td(r.state));
+    tr.appendChild(td(r.docket));
+    // "Jul  2 2026 12:00AM" → "Jul 2 2026" — the time component is always midnight.
+    tr.appendChild(td(r.docketDate.replace(/\s+\d{1,2}:\d{2}\s*[AP]M\s*$/i,'').replace(/\s+/g,' ')));
+    tr.appendChild(td(r.carrier,'wrap'));
+
+    var si = statusInfo(res);
+    var stCell = document.createElement('td');
+    var badge = document.createElement('span');
+    badge.className = 'status-badge '+si.cls;
+    badge.textContent = si.text;
+    if(res && res.latestLocation) badge.title = si.text+' — '+res.latestLocation+(res.latestDate?' ('+res.latestDate+')':'');
+    stCell.appendChild(badge);
+    tr.appendChild(stCell);
+
+    var podCell = document.createElement('td');
+    if(res && res.podUrl){
+      var view = document.createElement('button');
+      view.className='btn-pod'; view.textContent='👁 View';
+      view.onclick = function(){ viewPOD(res.podUrl, r.docket); };
+      var dl = document.createElement('button');
+      dl.className='btn-pod btn-pod-dl'; dl.textContent='⬇';
+      dl.onclick = function(){ dlPOD(res.podUrl, r.docket); };
+      podCell.appendChild(view); podCell.appendChild(dl);
+    } else if(res && res.trackingLink){
+      var a = document.createElement('a');
+      a.className='btn-pod'; a.target='_blank'; a.rel='noopener';
+      a.href = res.trackingLink; a.textContent='🔗 Track';
+      podCell.appendChild(a);
+      (res.altLinks||[]).forEach(function(alt){
+        var b = document.createElement('a');
+        b.className='btn-pod btn-pod-dl'; b.target='_blank'; b.rel='noopener';
+        b.href = alt.url; b.textContent = alt.label; b.title = 'Alternative: '+alt.label;
+        podCell.appendChild(b);
+      });
+    } else {
+      var s = document.createElement('span');
+      s.className='muted'; s.textContent = res && res.mode==='offline' ? 'Offline' : '—';
+      podCell.appendChild(s);
+    }
+    tr.appendChild(podCell);
+    frag.appendChild(tr);
+  });
+
+  body.appendChild(frag);
+  $('resultsArea').style.display='block';
+  $('rowCount').textContent = 'Showing '+list.length+' of '+rows.length+' lines'+
+    (carrierFilter ? ' · carrier: '+carrierFilter : '');
+}
+$('searchBox').oninput = render;
+
+// ── TRACKING ──
+function uniqueShipments(){
+  var seen = {}, out = [];
+  rows.forEach(function(r){
+    if(!r.docket) return;
+    var k = trackKey(r);
+    if(seen[k]) return;
+    seen[k]=1;
+    out.push({ key:k, docket:r.docket, carrier:r.carrier });
+  });
+  return out;
+}
+
+async function trackAll(){
+  var units = uniqueShipments();
+  if(!units.length) return;
+  var btn = $('btnTrack');
+  btn.disabled=true; btn.textContent='⏳ Tracking…';
+  $('progressArea').style.display='block';
+  results = {};
+
+  var done = 0;
+  for(var i=0;i<units.length;i+=BATCH){
+    var chunk = units.slice(i, i+BATCH);
+    setProgress(done, units.length);
+    try{
+      var res = await fetch('/api/track',{
+        method:'POST',
+        headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+JWT },
+        body: JSON.stringify({ shipments: chunk.map(function(u){ return { docket:u.docket, carrier:u.carrier }; }) })
+      });
+      if(res.status===401){ $('btnLogout').click(); return; }
+      var data = await res.json();
+      (data.results||[]).forEach(function(r, idx){
+        results[chunk[idx].key] = r;
+      });
+    }catch(e){
+      chunk.forEach(function(u){ results[u.key] = { success:false, error:e.message, docket:u.docket }; });
+    }
+    done += chunk.length;
+    setProgress(done, units.length);
+    render();
+  }
+
+  $('progressArea').style.display='none';
+  btn.disabled=false; btn.textContent='↻ Re-Track';
+  $('btnExcel').disabled=false;
+  $('btnPODs').disabled = !Object.keys(results).some(function(k){ return results[k].podUrl; });
+  renderStats();
+  render();
+}
+$('btnTrack').onclick = trackAll;
+
+function setProgress(done,total){
+  var pct = total ? Math.round(done/total*100) : 0;
+  $('progressBar').style.width = pct+'%';
+  $('progressText').textContent = 'Tracking '+done+' / '+total+' dockets…';
+}
+
+function renderStats(){
+  var all = Object.keys(results).map(function(k){ return results[k]; });
+  var n = function(re){ return all.filter(function(r){ return r.success!==false && re.test(r.currentStatus||''); }).length; };
+  var offline = all.filter(function(r){ return r.mode==='offline'; }).length;
+  var linkOnly = all.filter(function(r){ return r.linkOnly; }).length;
+  var errors = all.filter(function(r){ return r.success===false; }).length;
+  var pods = all.filter(function(r){ return r.podUrl; }).length;
+
+  var row = $('statsRow');
+  row.style.display='flex';
+  row.innerHTML =
+    '<span class="pill pill-blue">📦 Dockets: '+all.length+'</span>'+
+    '<span class="pill pill-green">✅ Delivered: '+n(/delivered|delivery done/i)+'</span>'+
+    '<span class="pill pill-orange">🚚 Out for delivery: '+n(/out for delivery/i)+'</span>'+
+    '<span class="pill pill-blue">🔄 In transit: '+n(/transit|forwarded|booked|scanned|dispatch|manifest/i)+'</span>'+
+    '<span class="pill pill-grey">🔗 Track on carrier site: '+linkOnly+'</span>'+
+    '<span class="pill pill-grey">🏠 Offline (JMS): '+offline+'</span>'+
+    (errors ? '<span class="pill pill-red">❌ Errors: '+errors+'</span>' : '')+
+    '<span class="pill pill-grey">📎 PODs: '+pods+'</span>';
+}
+
+// ── POD ──
+async function fetchPod(url, docket){
+  return fetch('/api/pod-image?url='+encodeURIComponent(url)+'&docket='+encodeURIComponent(docket),
+    { headers:{ 'Authorization':'Bearer '+JWT } });
+}
+async function viewPOD(url, docket){
+  currentPod = { url:url, docket:docket };
+  $('podModalTitle').textContent = 'POD — '+docket;
+  $('podModalImg').removeAttribute('src');
+  $('podModal').classList.add('show');
+  try{
+    var res = await fetchPod(url, docket);
+    if(res.ok) $('podModalImg').src = URL.createObjectURL(await res.blob());
+    else $('podModalImg').alt = 'Failed to load POD ('+res.status+')';
+  }catch(e){ $('podModalImg').alt='Error: '+e.message; }
+}
+async function dlPOD(url, docket){
+  var res = await fetchPod(url, docket);
+  if(!res.ok){ alert('POD download failed'); return; }
+  var blob = await res.blob();
+  var ext = (blob.type||'').indexOf('pdf')>=0 ? 'pdf' : 'jpg';
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = docket+'.'+ext;
+  a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); }, 5000);
+}
+$('btnPodDl').onclick = function(){ if(currentPod.url) dlPOD(currentPod.url, currentPod.docket); };
+$('btnPodClose').onclick = function(){ $('podModal').classList.remove('show'); };
+$('podModal').onclick = function(e){ if(e.target===this) this.classList.remove('show'); };
+
+$('btnPODs').onclick = async function(){
+  var btn = this;
+  btn.disabled=true; btn.textContent='⏳ Downloading…';
+  var seen = {};
+  for(var i=0;i<rows.length;i++){
+    var r = rows[i], res = results[trackKey(r)];
+    if(res && res.podUrl && !seen[r.docket]){
+      seen[r.docket]=1;
+      await dlPOD(res.podUrl, r.docket);
+      await new Promise(function(f){ setTimeout(f,300); });
+    }
+  }
+  btn.disabled=false; btn.textContent='📎 Download All PODs';
+};
+
+// ── EXPORT ──
+// Same columns as the uploaded register, plus the two tracker outputs.
+function downloadExcel(){
+  var COLS = ['Date','Invoice No','Buyer Code','Buyer Name','State','Docket No','Docket Date','Carrier Name','Status','POD Link'];
+  var data = rows.map(function(r){
+    var res = results[trackKey(r)] || {};
+    return {
+      'Date': r.date,
+      'Invoice No': r.invoiceNo,
+      'Buyer Code': r.buyerCode,
+      'Buyer Name': r.name,
+      'State': r.state,
+      'Docket No': r.docket,
+      'Docket Date': r.docketDate,
+      'Carrier Name': r.carrier,
+      'Status': res.success === false ? ('Error: '+(res.error||'Failed')) : (res.currentStatus || 'Not tracked'),
+      'POD Link': res.podUrl || res.trackingLink || ''
+    };
+  });
+
+  var ws = XLSX.utils.json_to_sheet(data, { header: COLS });
+  // Widths and autofilter are supported by the community SheetJS build. Cell
+  // styling (.s) is a Pro-only feature and is silently dropped, so it is not
+  // used here.
+  ws['!cols'] = [{wch:11},{wch:16},{wch:13},{wch:30},{wch:16},{wch:16},{wch:20},{wch:28},{wch:34},{wch:52}];
+  ws['!autofilter'] = { ref: XLSX.utils.encode_range({ s:{r:0,c:0}, e:{r:data.length, c:COLS.length-1} }) };
+
+  data.forEach(function(row, ri){
+    if(row['POD Link']){
+      var ref = XLSX.utils.encode_cell({ r:ri+1, c:COLS.indexOf('POD Link') });
+      if(ws[ref]) ws[ref].l = { Target: row['POD Link'] };
+    }
+  });
+
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Tracking');
+  XLSX.writeFile(wb, 'Sale_Register_Tracking_'+new Date().toISOString().slice(0,10)+'.xlsx');
+}
+$('btnExcel').onclick = downloadExcel;
+
+$('btnClear').onclick = function(){
+  rows=[]; results={}; carrierFilter=null;
+  $('controls').style.display='none';
+  $('progressArea').style.display='none';
+  $('statsRow').style.display='none';
+  $('carrierChips').style.display='none';
+  $('resultsArea').style.display='none';
+  $('emptyState').style.display='block';
+  $('fileInput').value='';
+  $('searchBox').value='';
+  $('uploadZone').classList.remove('compact');
+  $('uploadTitle').textContent = 'Upload Sale Register (.xlsx)';
+  $('uploadHint').textContent = 'Drag & drop or click — reads DOCKET NO and CARRIER NAME from the SaleRegister sheet';
+  $('carrierBadge').textContent = 'Multi-carrier';
+};
+
+checkAuth();
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "name": "jms-courier-tracker",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Sale Register (SaleRegister_New) courier tracker — routes by CARRIER NAME column",
+  "engines": {
+    "node": ">=18"
+  }
+}
