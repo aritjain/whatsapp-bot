@@ -38,7 +38,7 @@ Local carriers (own fleet, nothing to look up): **JMS Trading**, **Kent**,
 | Carrier | Mode | Status source | POD |
 |---|---|---|---|
 | RE Logistics | `api` | `lms.relogi.in` portal (ASP.NET, server-rendered) | **Yes** — direct link or WebForms postback |
-| Delhivery | `api` | `dlv-api.delhivery.com` \* | Guessed endpoint \* |
+| Delhivery | `api` | `delhivery.com/track-v2/lr/<LR>` — embedded page state, then JSON APIs \* | Whatever the payload carries \* |
 | Safexpress | `api` | Guessed endpoint \* | Guessed endpoint \* |
 | Allcargo, R.V. Express | `api` | Aggregator chain | No |
 | Skyking / Quick India | `api` | First-party APIs (carried over, proven) | Yes |
@@ -82,6 +82,12 @@ provider answered. The carrier's own wording is kept and shown in the tooltip.
 
 If everything fails, the row shows "Lookup failed" with a small ↗ to the
 tracking page. There is no "go to carrier site" button in the normal path.
+
+Delhivery's `track-v2` route is keyed by **LR number**, which is exactly what
+the register's DOCKET NO column holds, so the URL is built straight from the
+sheet. Their AWB is a separate identifier and is not needed. The adapter reads
+state embedded in the document first, falls back to the rendered timeline, then
+to JSON API candidates.
 
 RE Logistics runs Sagar Informatics' LMS on ASP.NET WebForms, so its POD link
 is often `__doPostBack(...)` rather than a URL. `lib/aspnet.js` replays that

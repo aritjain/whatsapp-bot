@@ -2,6 +2,7 @@
 
 const { trackViaProviders } = require('./providers');
 const reLogistics = require('./relogistics');
+const delhivery = require('./delhivery');
 
 /**
  * Carrier registry.
@@ -168,7 +169,7 @@ const STATUS_RULES = [
   ['Delivered', /delivered|delivery\s*done|pod\s*upload|consignee\s*received|shipment\s*received\s*by/i],
   ['Out for Delivery', /out\s*for\s*delivery|ofd|with\s*delivery\s*(agent|boy)/i],
   ['Awaiting Pickup', /available\s*for\s*pickup|awaiting\s*(collection|pickup)|ready\s*for\s*(pickup|collection)/i],
-  ['In Transit', /\btransit\b|intransit|forwarded|departed|arrived|reached|connected|in\s*route|shipment\s*moved/i],
+  ['In Transit', /\btransit\b|intransit|on\s*the\s*way|forwarded|departed|arrived|reached|connected|in\s*route|shipment\s*moved/i],
   ['Picked Up', /picked\s*up|\bpickup\b|collected/i],
   ['Booked', /booked|manifest|info\s*received|data\s*received|order\s*placed|soft\s*data|consignment\s*created|\bpending\b/i],
   ['Not Found', /not\s*found|no\s*record|invalid|no\s*data|expired/i]
@@ -362,17 +363,8 @@ function nativeAdapter(carrierId, statusUrls, podUrls, headers) {
   };
 }
 
-function trackDelhiveryNative(docket, ctx) {
-  return lazyNative('trackDelhiveryNative', () => nativeAdapter(
-  'delhivery',
-  [
-    'https://dlv-api.delhivery.com/v3/unified-tracking?wbn={D}',
-    'https://track.delhivery.com/api/v1/packages/json/?waybill={D}',
-    'https://www.delhivery.com/api/tracking/?waybill={D}'
-  ],
-  ['https://dlv-api.delhivery.com/v3/pod?wbn={D}'],
-  { Origin: 'https://www.delhivery.com', Referer: 'https://www.delhivery.com/tracking' }
-  ))(docket, ctx);
+function trackDelhiveryNative(docket) {
+  return delhivery.track(docket);
 }
 
 function trackSafexpressNative(docket, ctx) {

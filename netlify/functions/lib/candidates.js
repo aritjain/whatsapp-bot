@@ -15,9 +15,9 @@
 
 // Pages whose markup and scripts are scanned for API URLs.
 const DISCOVERY_PAGES = {
-  delhivery: ['https://www.delhivery.com/tracking', 'https://www.delhivery.com/'],
+  delhivery: ['https://www.delhivery.com/track-v2/lr/{D}', 'https://www.delhivery.com/'],
   safexpress: ['https://www.safexpress.com/', 'https://www.safexpress.com/track-shipment'],
-  relogistics: ['https://www.relogi.in/tracking', 'https://www.relogi.in/']
+  relogistics: ['https://lms.relogi.in/WebTracking/WebTracking.aspx?AwbNo={D}', 'https://lms.relogi.in/']
 };
 
 /**
@@ -27,6 +27,9 @@ const DISCOVERY_PAGES = {
  */
 const CANDIDATES = {
   delhivery: [
+    { kind: 'status', url: 'https://www.delhivery.com/track-v2/lr/{D}' },
+    { kind: 'status', url: 'https://www.delhivery.com/api/track-v2/lr/{D}' },
+    { kind: 'status', url: 'https://dlv-api.delhivery.com/v3/unified-tracking?lrnum={D}' },
     { kind: 'status', url: 'https://dlv-api.delhivery.com/v3/unified-tracking?wbn={D}' },
     { kind: 'status', url: 'https://track.delhivery.com/api/v1/packages/json/?waybill={D}' },
     { kind: 'status', url: 'https://www.delhivery.com/api/tracking/?waybill={D}' },
@@ -40,12 +43,7 @@ const CANDIDATES = {
     { kind: 'pod', url: 'https://www.safexpress.com/api/pod?waybill={D}' }
   ],
   relogistics: [
-    { kind: 'status', url: 'https://www.relogi.in/api/tracking?docket={D}' },
-    { kind: 'status', url: 'https://www.relogi.in/api/v1/track/{D}' },
-    { kind: 'status', url: 'https://www.relogi.in/tracking?docket={D}' },
-    // WordPress front ends commonly expose their AJAX handler here.
-    { kind: 'status', url: 'https://www.relogi.in/wp-admin/admin-ajax.php?action=track&docket={D}' },
-    { kind: 'pod', url: 'https://www.relogi.in/api/pod?docket={D}' }
+    { kind: 'status', url: 'https://lms.relogi.in/WebTracking/WebTracking.aspx?AwbNo={D}' }
   ]
 };
 

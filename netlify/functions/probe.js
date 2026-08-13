@@ -56,8 +56,8 @@ function extractUrls(text, base) {
   return [...found];
 }
 
-async function discover(carrierId) {
-  const pages = DISCOVERY_PAGES[carrierId] || [];
+async function discover(carrierId, docket) {
+  const pages = (DISCOVERY_PAGES[carrierId] || []).map((u) => u.replace(/\{D\}/g, encodeURIComponent(docket)));
   const out = { pages: [], urls: [], bundles: [] };
 
   for (const page of pages) {
@@ -211,7 +211,7 @@ exports.handler = async (event) => {
   }
   if (!CANDIDATES[carrier]) return json(400, { error: `Unknown carrier`, carriers: Object.keys(CANDIDATES) });
 
-  const [disc, cands] = await Promise.all([discover(carrier), tryCandidates(carrier, docket)]);
+  const [disc, cands] = await Promise.all([discover(carrier, docket), tryCandidates(carrier, docket)]);
 
   if (format === 'json') return json(200, { carrier, docket, discovered: disc, candidates: cands });
   return {
