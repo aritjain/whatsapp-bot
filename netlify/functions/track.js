@@ -20,10 +20,16 @@ async function mapLimit(items, limit, worker) {
   return out;
 }
 
-/** Per-request memo, so adapters sharing a session key fetch it once. */
-function makeCtx() {
+/**
+ * Per-request memo, so adapters sharing a session key or a batched upstream
+ * call do the work once. `batch` lets an adapter see every shipment in the
+ * current request — 17track bills per number, so it fetches the whole batch in
+ * one round trip instead of one per docket.
+ */
+function makeCtx(batch) {
   const cache = new Map();
   return {
+    batch,
     once(key, fn) {
       if (!cache.has(key)) cache.set(key, fn());
       return cache.get(key);
@@ -130,7 +136,7 @@ exports.handler = async (event) => {
     return json(400, { error: `Batch too large (max ${MAX_BATCH})` });
   }
 
-  const ctx = makeCtx();
+  const ctx = makeCtx(shipments);
   const results = await mapLimit(shipments, CONCURRENCY, (s) => trackOne(s, ctx));
   return json(200, { results });
 };

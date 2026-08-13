@@ -1,5 +1,7 @@
 'use strict';
 
+const { trackViaProviders } = require('./providers');
+
 /**
  * Carrier registry.
  *
@@ -38,7 +40,7 @@ const CARRIERS = [
     label: 'Delhivery',
     match: /delhivery/i,
     mode: 'api',
-    adapter: trackDelhivery,
+    adapter: withProviders(trackDelhivery),
     link: aggregatorLink('Delhivery'),
     altLinks: [
       { label: 'trackcourier.io', url: () => 'https://trackcourier.io/delhivery-courier-tracking' },
@@ -50,7 +52,7 @@ const CARRIERS = [
     label: 'Safexpress',
     match: /safexpress/i,
     mode: 'api',
-    adapter: aggregatorAdapter('Safexpress'),
+    adapter: withProviders(aggregatorAdapter('Safexpress')),
     link: aggregatorLink('Safexpress'),
     altLinks: [{ label: 'safexpress.com', url: () => 'https://www.safexpress.com/' }]
   },
@@ -59,7 +61,7 @@ const CARRIERS = [
     label: 'SmartShift',
     match: /smart\s*shift/i,
     mode: 'api',
-    adapter: aggregatorAdapter('Smartshift Logistics Solutions'),
+    adapter: withProviders(aggregatorAdapter('Smartshift Logistics Solutions')),
     link: aggregatorLink('Smartshift Logistics Solutions')
   },
   {
@@ -67,7 +69,7 @@ const CARRIERS = [
     label: 'Allcargo',
     match: /all\s*cargo/i,
     mode: 'api',
-    adapter: aggregatorAdapter('All Cargo Logistics'),
+    adapter: withProviders(aggregatorAdapter('All Cargo Logistics')),
     link: aggregatorLink('All Cargo Logistics')
   },
   {
@@ -76,7 +78,7 @@ const CARRIERS = [
     match: /\bre\s*logistics\b/i,
     mode: 'api',
     // Aggregator URL confirmed working by the customer with a live docket.
-    adapter: aggregatorAdapter('RE Logistics Solutions'),
+    adapter: withProviders(aggregatorAdapter('RE Logistics Solutions')),
     link: aggregatorLink('RE Logistics Solutions'),
     altLinks: [{ label: 'relogi.in', url: () => 'https://www.relogi.in/tracking' }]
   },
@@ -85,7 +87,7 @@ const CARRIERS = [
     label: 'R.V. Express',
     match: /r\.?\s*v\.?\s*express/i,
     mode: 'api',
-    adapter: aggregatorAdapter('RV Express'),
+    adapter: withProviders(aggregatorAdapter('RV Express')),
     link: aggregatorLink('RV Express')
   },
 
@@ -146,7 +148,7 @@ function resolveCarrier(rawName) {
     id: 'unmapped',
     label: name,
     mode: 'api',
-    adapter: aggregatorAdapter(name),
+    adapter: withProviders(aggregatorAdapter(name)),
     link: aggregatorLink(name),
     unmapped: true
   };
@@ -157,18 +159,23 @@ function resolveCarrier(rawName) {
  * report reads the same regardless of which carrier produced it.
  * Order matters: the most specific wording is tested first.
  */
+// Covers both carrier free-text wording and 17track's canonical vocabulary
+// (Delivered, InTransit, OutForDelivery, InfoReceived, DeliveryFailure,
+// AvailableForPickup, Exception, Expired, NotFound), which arrives unspaced.
 const STATUS_RULES = [
+  // Undelivered must precede Delivered: "undelivered" contains "delivered".
+  ['Undelivered', /undelivered|delivery\s*fail(ure|ed)|fail(ed)?\s*attempt|attempt\s*fail|not\s*delivered|refused|\brto\b|return\s*to\s*origin|exception/i],
   ['Delivered', /delivered|delivery\s*done|pod\s*upload|consignee\s*received|shipment\s*received\s*by/i],
-  ['Undelivered', /undelivered|delivery\s*failed|not\s*delivered|refused|rto|return\s*to\s*origin/i],
   ['Out for Delivery', /out\s*for\s*delivery|ofd|with\s*delivery\s*(agent|boy)/i],
-  ['In Transit', /in\s*-?\s*transit|intransit|forwarded|departed|arrived|reached|connected|in\s*route|shipment\s*moved/i],
-  ['Picked Up', /picked\s*up|pickup\s*done|collected/i],
-  ['Booked', /booked|manifest|data\s*received|order\s*placed|soft\s*data|consignment\s*created/i],
-  ['Not Found', /not\s*found|no\s*record|invalid|no\s*data/i]
+  ['Awaiting Pickup', /available\s*for\s*pickup|awaiting\s*(collection|pickup)|ready\s*for\s*(pickup|collection)/i],
+  ['In Transit', /\btransit\b|intransit|forwarded|departed|arrived|reached|connected|in\s*route|shipment\s*moved/i],
+  ['Picked Up', /picked\s*up|\bpickup\b|collected/i],
+  ['Booked', /booked|manifest|info\s*received|data\s*received|order\s*placed|soft\s*data|consignment\s*created|\bpending\b/i],
+  ['Not Found', /not\s*found|no\s*record|invalid|no\s*data|expired/i]
 ];
 
 function normaliseStatus(raw) {
-  const s = String(raw || '').trim();
+  const s = String(raw || '').replace(/[_-]+/g, ' ').trim();
   if (!s) return '';
   for (const [canon, re] of STATUS_RULES) if (re.test(s)) return canon;
   return s;
@@ -195,6 +202,18 @@ const POD_HOST_ALLOWLIST = (process.env.POD_HOST_ALLOWLIST ||
 // ── Adapters ────────────────────────────────────────────────────────────────
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36';
+
+/**
+ * Wrap a carrier's own source so the configured provider chain is tried first,
+ * falling back to the carrier-specific path when no provider has a record.
+ */
+function withProviders(fallback) {
+  return async (docket, ctx) => {
+    const viaProvider = await trackViaProviders(docket, ctx);
+    if (viaProvider) return viaProvider;
+    return fallback(docket, ctx);
+  };
+}
 
 // ── Generic aggregator scrape ───────────────────────────────────────────────
 // thedeliverytracker.com renders a status table for any carrier passed as
@@ -447,4 +466,7 @@ async function trackQuick(docket) {
   };
 }
 
-module.exports = { CARRIERS, UNKNOWN, resolveCarrier, carrierCatalog, normaliseStatus, POD_HOST_ALLOWLIST };
+module.exports = {
+  CARRIERS, UNKNOWN, resolveCarrier, carrierCatalog, normaliseStatus,
+  POD_HOST_ALLOWLIST
+};

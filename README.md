@@ -49,20 +49,41 @@ itself, so a new carrier in next month's register still gets a status attempt.
 upstream hosts — the build environment enforces an egress allowlist. They are
 defensive and fail safe, but the response shapes have not been confirmed.
 
-### Automatic status, with a link as the safety net
+### Where status comes from
 
-Every trackable carrier attempts a real status lookup. If an adapter throws or
-returns nothing recognisable, `track.js` catches it and the row falls back to a
-deep link, so a broken adapter degrades one row instead of failing the report.
+Each docket walks a chain of providers; the first with a record wins, and
+anything that errors or has no record hands off to the next:
 
-The aggregator scrape ([thedeliverytracker.com](https://thedeliverytracker.com))
-covers every carrier through one integration: it takes the carrier name as a URL
-parameter. The extractor handles scan tables, two-column summary tables, and
-bare status phrases, and treats "no record found" as a negative result.
+```
+Ship24 → 17track → TrackingMore → AfterShip → carrier's own API → HTML aggregator → link
+```
 
-### Verifying and finalising an adapter
+A provider is only used when its API key is set, so unconfigured ones cost
+nothing. Order is configurable with `PROVIDER_ORDER`. Every provider that
+supports batching uses it — the whole request is fetched in one round trip and
+each docket reads the shared result, which matters because all four bill per
+tracking number.
 
-Run the probe on a machine with normal internet access:
+Statuses from every source are normalised to one vocabulary — `Delivered`,
+`Out for Delivery`, `In Transit`, `Picked Up`, `Booked`, `Awaiting Pickup`,
+`Undelivered`, `Not Found` — so the report reads the same regardless of which
+provider answered. The carrier's own wording is kept and shown in the tooltip.
+
+If everything fails, the row shows "Lookup failed" with a small ↗ to the
+tracking page. There is no "go to carrier site" button in the normal path.
+
+Note that `m.17track.net` is the mobile web app and renders results
+client-side, so it cannot be fetched server-side; the integration uses their
+API at `api.17track.net`, which needs a free token.
+
+**None of the four provider integrations has been verified against a live
+response** — this build environment blocks egress to all of them. Each parser
+reads defensively and returns nothing rather than guessing, so an unverified
+parser falls through to the next provider instead of showing a wrong status.
+
+### Verifying an adapter
+
+Run the probe from a machine with normal internet access:
 
 ```bash
 node tools/probe.js                                   # one sample per carrier
@@ -70,14 +91,8 @@ node tools/probe.js 71199373 "RE LOGISTICS SOLUTIONS" # a single docket
 node tools/probe.js --save                            # dump raw bodies
 ```
 
-It runs the shipped adapters against live endpoints and prints both the parsed
-result and the raw upstream body, which is what an adapter needs to be corrected
-against reality.
-
-To replace an aggregator scrape with a carrier's own API: DevTools → Network on
-the carrier's tracking page, find the XHR returning the status JSON, then write
-an adapter beside `trackSkyking`. The contract is
-`async (docket, ctx) => TrackResult`.
+It runs the shipped chain against live endpoints and prints both the parsed
+result and the raw upstream body.
 
 ## Configuration
 
@@ -94,7 +109,12 @@ source control — set these in Netlify and rotate them.**
 | `TOKEN_TTL_DAYS` | Session lifetime (default 7) |
 | `ALLOWED_ORIGIN` | CORS origin (default `*`; set to your domain) |
 | `POD_HOST_ALLOWLIST` | Hosts the POD proxy may fetch |
-| `DELIVERYTRACKER_ID` | `thedelivid` parameter for the aggregator |
+| `DELIVERYTRACKER_ID` | `thedelivid` parameter for the HTML aggregator |
+| `SHIP24_KEY` | Ship24 API key (`apik_…`) |
+| `SEVENTEENTRACK_KEY` | 17track API token |
+| `TRACKINGMORE_KEY` | TrackingMore API key |
+| `AFTERSHIP_KEY` | AfterShip API key |
+| `PROVIDER_ORDER` | Chain order, default `ship24,17track,trackingmore,aftership` |
 | `TRACK_CONCURRENCY` | Parallel upstream requests (default 6) |
 
 ## Layout
@@ -105,7 +125,7 @@ public/vendor/                 SheetJS + qrcodejs (no CDN)
 netlify/functions/auth.js      TOTP / static-key login → JWT
 netlify/functions/track.js     Batching, concurrency, routing
 netlify/functions/pod-image.js POD proxy (host-allowlisted)
-netlify/functions/lib/         Carrier registry + JWT helpers
+netlify/functions/lib/         Carrier registry, provider chain, JWT helpers
 dev-server.js                  Local runner
 ```
 
