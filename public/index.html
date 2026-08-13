@@ -382,8 +382,17 @@ var FIELDS = {
   carrier:    ['carrier name','transporter name','carrier']
 };
 
+// "CDN" as its own segment of a document number marks a credit note, e.g.
+// CDN-26000123 or PB1-CDN-0007. Guards against matching inside a longer word.
+function isCreditNote(v){
+  return /(^|[^A-Za-z])CDN([^A-Za-z]|$)/i.test(String(v||''));
+}
+
+var skippedCDN = 0;
+
 function parseWorkbook(wb){
   var out = [];
+  skippedCDN = 0;
   wb.SheetNames.forEach(function(sheetName){
     var grid = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { header:1, defval:'', raw:false, blankrows:true });
 
@@ -416,6 +425,8 @@ function parseWorkbook(wb){
       // Skips the merged sub-header row, blank spacers and the trailing Total row.
       if(!invoiceNo && !docket) continue;
       if(/^total$/i.test(cell('date')) || /^total$/i.test(invoiceNo)) continue;
+      // Credit notes (CDN) are not shipments — drop them entirely.
+      if(isCreditNote(invoiceNo) || isCreditNote(docket)){ skippedCDN++; continue; }
 
       out.push({
         date: cell('date'),
@@ -451,7 +462,8 @@ function handleFile(file){
       $('statsRow').style.display='none';
       renderCarrierChips();
       render();
-      $('carrierBadge').textContent = rows.length + ' lines · ' + uniqueShipments().length + ' dockets';
+      $('carrierBadge').textContent = rows.length + ' lines · ' + uniqueShipments().length + ' dockets' +
+        (skippedCDN ? ' · ' + skippedCDN + ' credit notes skipped' : '');
     }catch(ex){ alert('Error reading file: '+ex.message); }
   };
   reader.readAsArrayBuffer(file);
@@ -491,16 +503,24 @@ function renderCarrierChips(){
 }
 
 // ── TABLE ──
+// Status is normalised server-side into canonical buckets; this only picks the
+// colour and handles the not-yet-tracked / failed cases.
+var STATUS_CLASS = {
+  'Delivered':'s-delivered',
+  'Out for Delivery':'s-outdelivery',
+  'In Transit':'s-intransit',
+  'Picked Up':'s-intransit',
+  'Booked':'s-intransit',
+  'Undelivered':'s-error',
+  'Not Found':'s-error'
+};
 function statusInfo(res){
   if(!res) return { cls:'s-pending', text:'Pending' };
-  if(res.success === false) return { cls:'s-error', text:'Error: '+(res.error||'Failed') };
-  var t = res.currentStatus || '—';
-  if(res.mode === 'offline') return { cls:'s-offline', text:t };
-  if(res.linkOnly)           return { cls:'s-link', text:t };
-  if(/delivered|delivery done|pod\s*upload/i.test(t)) return { cls:'s-delivered', text:t };
-  if(/out for delivery/i.test(t))                    return { cls:'s-outdelivery', text:t };
-  if(/transit|forwarded|booked|scanned|received|dispatch|manifest|pickup/i.test(t)) return { cls:'s-intransit', text:t };
-  return { cls:'s-pending', text:t };
+  if(res.mode === 'offline') return { cls:'s-offline', text:'Not tracked' };
+  if(res.success === false)  return { cls:'s-error', text: res.error || 'Lookup failed' };
+  if(res.linkOnly)           return { cls:'s-error', text:'Lookup failed' };
+  var t = res.status || res.currentStatus || '—';
+  return { cls: STATUS_CLASS[t] || 's-pending', text: t, raw: res.rawStatus };
 }
 
 function visibleRows(){
@@ -545,10 +565,17 @@ function render(){
     var badge = document.createElement('span');
     badge.className = 'status-badge '+si.cls;
     badge.textContent = si.text;
-    if(res && res.latestLocation) badge.title = si.text+' — '+res.latestLocation+(res.latestDate?' ('+res.latestDate+')':'');
+    // Carrier's own wording and last scan sit in the tooltip.
+    var tip = [];
+    if(si.raw && si.raw !== si.text) tip.push(si.raw);
+    if(res && res.latestLocation) tip.push(res.latestLocation);
+    if(res && res.latestDate) tip.push(res.latestDate);
+    if(tip.length) badge.title = tip.join(' · ');
     stCell.appendChild(badge);
     tr.appendChild(stCell);
 
+    // POD column: the POD itself when we have one, never a "go to carrier site"
+    // button. A small ↗ appears only when the automatic lookup failed.
     var podCell = document.createElement('td');
     if(res && res.podUrl){
       var view = document.createElement('button');
@@ -558,20 +585,17 @@ function render(){
       dl.className='btn-pod btn-pod-dl'; dl.textContent='⬇';
       dl.onclick = function(){ dlPOD(res.podUrl, r.docket); };
       podCell.appendChild(view); podCell.appendChild(dl);
-    } else if(res && res.trackingLink){
+    } else if(res && (res.linkOnly || res.success===false) && res.trackingLink){
       var a = document.createElement('a');
       a.className='btn-pod'; a.target='_blank'; a.rel='noopener';
-      a.href = res.trackingLink; a.textContent='🔗 Track';
+      a.href = res.trackingLink; a.textContent='↗';
+      a.title = 'Automatic lookup failed — open the tracking page manually';
+      a.style.background='#8a94ad';
       podCell.appendChild(a);
-      (res.altLinks||[]).forEach(function(alt){
-        var b = document.createElement('a');
-        b.className='btn-pod btn-pod-dl'; b.target='_blank'; b.rel='noopener';
-        b.href = alt.url; b.textContent = alt.label; b.title = 'Alternative: '+alt.label;
-        podCell.appendChild(b);
-      });
     } else {
       var s = document.createElement('span');
-      s.className='muted'; s.textContent = res && res.mode==='offline' ? 'Offline' : '—';
+      s.className='muted';
+      s.textContent = res ? (res.mode==='offline' ? '—' : 'No POD') : '—';
       podCell.appendChild(s);
     }
     tr.appendChild(podCell);
@@ -646,22 +670,21 @@ function setProgress(done,total){
 
 function renderStats(){
   var all = Object.keys(results).map(function(k){ return results[k]; });
-  var n = function(re){ return all.filter(function(r){ return r.success!==false && re.test(r.currentStatus||''); }).length; };
+  var by = function(s){ return all.filter(function(r){ return r.status===s; }).length; };
   var offline = all.filter(function(r){ return r.mode==='offline'; }).length;
-  var linkOnly = all.filter(function(r){ return r.linkOnly; }).length;
-  var errors = all.filter(function(r){ return r.success===false; }).length;
-  var pods = all.filter(function(r){ return r.podUrl; }).length;
+  var failed  = all.filter(function(r){ return r.mode!=='offline' && (r.linkOnly || r.success===false); }).length;
+  var pods    = all.filter(function(r){ return r.podUrl; }).length;
 
   var row = $('statsRow');
   row.style.display='flex';
   row.innerHTML =
     '<span class="pill pill-blue">📦 Dockets: '+all.length+'</span>'+
-    '<span class="pill pill-green">✅ Delivered: '+n(/delivered|delivery done/i)+'</span>'+
-    '<span class="pill pill-orange">🚚 Out for delivery: '+n(/out for delivery/i)+'</span>'+
-    '<span class="pill pill-blue">🔄 In transit: '+n(/transit|forwarded|booked|scanned|dispatch|manifest/i)+'</span>'+
-    '<span class="pill pill-grey">🔗 Track on carrier site: '+linkOnly+'</span>'+
-    '<span class="pill pill-grey">🏠 Offline (JMS): '+offline+'</span>'+
-    (errors ? '<span class="pill pill-red">❌ Errors: '+errors+'</span>' : '')+
+    '<span class="pill pill-green">✅ Delivered: '+by('Delivered')+'</span>'+
+    '<span class="pill pill-orange">🚚 Out for delivery: '+by('Out for Delivery')+'</span>'+
+    '<span class="pill pill-blue">🔄 In transit: '+(by('In Transit')+by('Picked Up')+by('Booked'))+'</span>'+
+    (by('Undelivered') ? '<span class="pill pill-red">↩ Undelivered: '+by('Undelivered')+'</span>' : '')+
+    '<span class="pill pill-grey">🏠 Not tracked: '+offline+'</span>'+
+    (failed ? '<span class="pill pill-red">❌ Lookup failed: '+failed+'</span>' : '')+
     '<span class="pill pill-grey">📎 PODs: '+pods+'</span>';
 }
 
@@ -726,8 +749,8 @@ function downloadExcel(){
       'Docket No': r.docket,
       'Docket Date': r.docketDate,
       'Carrier Name': r.carrier,
-      'Status': res.success === false ? ('Error: '+(res.error||'Failed')) : (res.currentStatus || 'Not tracked'),
-      'POD Link': res.podUrl || res.trackingLink || ''
+      'Status': statusInfo(res).text,
+      'POD Link': res.podUrl || ''
     };
   });
 

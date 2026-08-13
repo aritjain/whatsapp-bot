@@ -1,7 +1,7 @@
 'use strict';
 
 const { verifyRequest, cors, json } = require('./lib/auth-jwt');
-const { resolveCarrier, carrierCatalog } = require('./lib/carriers');
+const { resolveCarrier, carrierCatalog, normaliseStatus } = require('./lib/carriers');
 
 const MAX_BATCH = Number(process.env.MAX_BATCH || 25);
 const CONCURRENCY = Number(process.env.TRACK_CONCURRENCY || 6);
@@ -79,7 +79,19 @@ async function trackOne({ docket, carrier: rawCarrier }, ctx) {
     if (!r || r.success === false) {
       return { ...base, success: false, tracked: true, error: (r && r.error) || 'No data', trackingLink: link, events: [] };
     }
-    return { ...base, success: true, tracked: true, trackingLink: link, ...r };
+    // Canonical status for the report; the carrier's own wording is kept too.
+    const status = normaliseStatus(r.currentStatus);
+    return {
+      ...base,
+      success: true,
+      tracked: true,
+      trackingLink: link,
+      ...r,
+      status,
+      rawStatus: r.currentStatus || '',
+      currentStatus: status || r.currentStatus || '',
+      isDelivered: status === 'Delivered' || !!r.isDelivered
+    };
   } catch (e) {
     // Degrade to a deep link rather than showing a bare error — the shipment
     // is still lookupable by hand.

@@ -90,12 +90,19 @@ const CARRIERS = [
   },
 
   // ── Not tracked ───────────────────────────────────────────────────────────
-  // JMS Trading Services is own-fleet / offline delivery. Its "docket numbers"
-  // are the invoice numbers themselves, so there is nothing to track.
+  // Own-fleet / offline delivery. For both of these the "docket number" is the
+  // invoice number itself, so there is nothing to look up.
   {
     id: 'jms',
     label: 'JMS Trading (offline)',
     match: /jms\s*trading/i,
+    mode: 'offline',
+    offlineNote: 'Offline delivery — not tracked'
+  },
+  {
+    id: 'kent',
+    label: 'Kent (offline)',
+    match: /^kent\b/i,
     mode: 'offline',
     offlineNote: 'Offline delivery — not tracked'
   },
@@ -143,6 +150,28 @@ function resolveCarrier(rawName) {
     link: aggregatorLink(name),
     unmapped: true
   };
+}
+
+/**
+ * Collapse a carrier's free-text scan wording into one canonical status, so the
+ * report reads the same regardless of which carrier produced it.
+ * Order matters: the most specific wording is tested first.
+ */
+const STATUS_RULES = [
+  ['Delivered', /delivered|delivery\s*done|pod\s*upload|consignee\s*received|shipment\s*received\s*by/i],
+  ['Undelivered', /undelivered|delivery\s*failed|not\s*delivered|refused|rto|return\s*to\s*origin/i],
+  ['Out for Delivery', /out\s*for\s*delivery|ofd|with\s*delivery\s*(agent|boy)/i],
+  ['In Transit', /in\s*-?\s*transit|intransit|forwarded|departed|arrived|reached|connected|in\s*route|shipment\s*moved/i],
+  ['Picked Up', /picked\s*up|pickup\s*done|collected/i],
+  ['Booked', /booked|manifest|data\s*received|order\s*placed|soft\s*data|consignment\s*created/i],
+  ['Not Found', /not\s*found|no\s*record|invalid|no\s*data/i]
+];
+
+function normaliseStatus(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  for (const [canon, re] of STATUS_RULES) if (re.test(s)) return canon;
+  return s;
 }
 
 /** Public shape used by the frontend to render filter chips / legends. */
@@ -418,4 +447,4 @@ async function trackQuick(docket) {
   };
 }
 
-module.exports = { CARRIERS, UNKNOWN, resolveCarrier, carrierCatalog, POD_HOST_ALLOWLIST };
+module.exports = { CARRIERS, UNKNOWN, resolveCarrier, carrierCatalog, normaliseStatus, POD_HOST_ALLOWLIST };
