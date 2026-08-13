@@ -40,7 +40,7 @@ const CARRIERS = [
     label: 'Delhivery',
     match: /delhivery/i,
     mode: 'api',
-    adapter: withProviders(trackDelhivery),
+    adapter: nativeFirst(trackDelhiveryNative, withProviders(aggregatorAdapter('Delhivery'))),
     link: aggregatorLink('Delhivery'),
     altLinks: [
       { label: 'trackcourier.io', url: () => 'https://trackcourier.io/delhivery-courier-tracking' },
@@ -52,7 +52,7 @@ const CARRIERS = [
     label: 'Safexpress',
     match: /safexpress/i,
     mode: 'api',
-    adapter: withProviders(aggregatorAdapter('Safexpress')),
+    adapter: nativeFirst(trackSafexpressNative, withProviders(aggregatorAdapter('Safexpress'))),
     link: aggregatorLink('Safexpress'),
     altLinks: [{ label: 'safexpress.com', url: () => 'https://www.safexpress.com/' }]
   },
@@ -78,7 +78,7 @@ const CARRIERS = [
     match: /\bre\s*logistics\b/i,
     mode: 'api',
     // Aggregator URL confirmed working by the customer with a live docket.
-    adapter: withProviders(aggregatorAdapter('RE Logistics Solutions')),
+    adapter: nativeFirst(trackReLogisticsNative, withProviders(aggregatorAdapter('RE Logistics Solutions'))),
     link: aggregatorLink('RE Logistics Solutions'),
     altLinks: [{ label: 'relogi.in', url: () => 'https://www.relogi.in/tracking' }]
   },
@@ -193,7 +193,12 @@ const POD_HOST_ALLOWLIST = (process.env.POD_HOST_ALLOWLIST ||
     'www.quickindialogistics.com',
     'quickindialogistics.com',
     'dlv-api.delhivery.com',
-    'www.delhivery.com'
+    'track.delhivery.com',
+    'www.delhivery.com',
+    'www.safexpress.com',
+    'safexpress.com',
+    'www.relogi.in',
+    'relogi.in'
   ].join(','))
   .split(',')
   .map((h) => h.trim().toLowerCase())
@@ -213,6 +218,184 @@ function withProviders(fallback) {
     if (viaProvider) return viaProvider;
     return fallback(docket, ctx);
   };
+}
+
+/**
+ * POD-first routing. The carrier's own API is tried before the aggregators
+ * because only it returns a POD image; if it fails or yields no POD we still
+ * fall through, so status is never lost in the attempt.
+ */
+function nativeFirst(native, fallback) {
+  return async (docket, ctx) => {
+    try {
+      const r = await native(docket, ctx);
+      if (r && r.podUrl) return { ...r, source: 'carrier' };
+      if (r) {
+        // Status but no POD: prefer it only if nothing else answers.
+        const viaProvider = await trackViaProviders(docket, ctx);
+        return viaProvider ? { ...viaProvider, podUrl: viaProvider.podUrl || r.podUrl || '' } : { ...r, source: 'carrier' };
+      }
+    } catch (_) { /* fall through */ }
+    return fallback(docket, ctx);
+  };
+}
+
+
+// ── Carrier-native adapters ─────────────────────────────────────────────────
+// These exist for one reason: POD. The tracking aggregators return scan events
+// only, so a signed POD image can come from the carrier's own system.
+//
+// UNVERIFIED endpoints — egress to all three carriers is blocked from the build
+// environment, so these are written from the candidate list in candidates.js
+// and have never seen a live response. Run /api/probe from the deployed site to
+// capture the real ones; each parser returns null (rather than guessing) when
+// the shape does not match, so a wrong URL degrades to the provider chain.
+
+/** Try a list of URLs, return the first JSON body that parses. */
+async function firstJson(urls, headers) {
+  for (const url of urls) {
+    try {
+      const r = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'application/json', ...headers } });
+      if (!r.ok) continue;
+      const text = await r.text();
+      if (!text.trim().startsWith('{') && !text.trim().startsWith('[')) continue;
+      return { url, json: JSON.parse(text) };
+    } catch (_) { /* next */ }
+  }
+  return null;
+}
+
+/** Depth-first search for the first value whose key and content look like a POD. */
+function findPodUrl(node, depth) {
+  if (!node || depth > 6) return '';
+  if (typeof node === 'string') {
+    return /^https?:\/\/\S+\.(jpe?g|png|pdf)(\?|$)/i.test(node) ? node : '';
+  }
+  if (Array.isArray(node)) {
+    for (const v of node) {
+      const hit = findPodUrl(v, depth + 1);
+      if (hit) return hit;
+    }
+    return '';
+  }
+  if (typeof node === 'object') {
+    for (const [k, v] of Object.entries(node)) {
+      if (/pod|proof|signature|delivery_image|dlv_img/i.test(k)) {
+        const hit = findPodUrl(v, depth + 1);
+        if (hit) return hit;
+      }
+    }
+    for (const v of Object.values(node)) {
+      const hit = findPodUrl(v, depth + 1);
+      if (hit) return hit;
+    }
+  }
+  return '';
+}
+
+/** Shared shape-agnostic reader for a carrier status payload. */
+function readCarrierPayload(json) {
+  const scans =
+    json?.data?.[0]?.scans || json?.ShipmentData?.[0]?.Shipment?.Scans ||
+    json?.data?.scans || json?.scans || json?.tracking || json?.trackingDetails ||
+    json?.data?.trackingDetails || json?.result?.scans || [];
+  if (!Array.isArray(scans) || !scans.length) return null;
+
+  const events = scans.map((raw) => {
+    const e = raw.ScanDetail || raw;
+    return {
+      date: e.ScanDateTime || e.scanDateTime || e.scan_date || e.date || e.dateTime || e.eventDate || '',
+      location: e.ScannedLocation || e.scannedLocation || e.location || e.city || e.branch || '',
+      status: e.Instructions || e.instructions || e.scan || e.status || e.remarks || e.activity || ''
+    };
+  }).filter((e) => e.status || e.location || e.date);
+  if (!events.length) return null;
+
+  // Newest-first payloads are common; the app wants oldest-last.
+  const a = Date.parse(events[0].date), b = Date.parse(events[events.length - 1].date);
+  if (!Number.isNaN(a) && !Number.isNaN(b) && a > b) events.reverse();
+
+  const latest = events[events.length - 1];
+  const status =
+    json?.data?.[0]?.status?.status || json?.status?.status ||
+    json?.data?.status || json?.currentStatus || latest.status || '';
+
+  return {
+    success: true,
+    currentStatus: status,
+    latestDate: latest.date,
+    latestLocation: latest.location,
+    city: String(latest.location || '').split(/[,_(]/)[0].trim(),
+    podUrl: findPodUrl(json, 0),
+    isDelivered: /delivered/i.test(status),
+    events
+  };
+}
+
+/** Build each native adapter once, on first use. */
+const _nativeCache = new Map();
+function lazyNative(key, build) {
+  if (!_nativeCache.has(key)) _nativeCache.set(key, build());
+  return _nativeCache.get(key);
+}
+
+function nativeAdapter(carrierId, statusUrls, podUrls, headers) {
+  return async (docket) => {
+    const enc = encodeURIComponent(docket);
+    const sub = (u) => u.replace(/\{D\}/g, enc);
+
+    const hit = await firstJson(statusUrls.map(sub), headers || {});
+    if (!hit) throw new Error(`${carrierId}: no usable status endpoint`);
+
+    const result = readCarrierPayload(hit.json);
+    if (!result) throw new Error(`${carrierId}: unrecognised payload`);
+
+    // A dedicated POD endpoint wins over anything embedded in the status body.
+    if (!result.podUrl && podUrls && podUrls.length) {
+      const pod = await firstJson(podUrls.map(sub), headers || {});
+      if (pod) result.podUrl = findPodUrl(pod.json, 0);
+    }
+    return result;
+  };
+}
+
+function trackDelhiveryNative(docket, ctx) {
+  return lazyNative('trackDelhiveryNative', () => nativeAdapter(
+  'delhivery',
+  [
+    'https://dlv-api.delhivery.com/v3/unified-tracking?wbn={D}',
+    'https://track.delhivery.com/api/v1/packages/json/?waybill={D}',
+    'https://www.delhivery.com/api/tracking/?waybill={D}'
+  ],
+  ['https://dlv-api.delhivery.com/v3/pod?wbn={D}'],
+  { Origin: 'https://www.delhivery.com', Referer: 'https://www.delhivery.com/tracking' }
+  ))(docket, ctx);
+}
+
+function trackSafexpressNative(docket, ctx) {
+  return lazyNative('trackSafexpressNative', () => nativeAdapter(
+  'safexpress',
+  [
+    'https://www.safexpress.com/api/track?waybill={D}',
+    'https://www.safexpress.com/RestService/TrackingService/GetTracking?waybillNo={D}',
+    'https://newsite.safexpress.com/api/tracking/{D}'
+  ],
+  ['https://www.safexpress.com/api/pod?waybill={D}'],
+  { Origin: 'https://www.safexpress.com', Referer: 'https://www.safexpress.com/' }
+  ))(docket, ctx);
+}
+
+function trackReLogisticsNative(docket, ctx) {
+  return lazyNative('trackReLogisticsNative', () => nativeAdapter(
+  'relogistics',
+  [
+    'https://www.relogi.in/api/tracking?docket={D}',
+    'https://www.relogi.in/api/v1/track/{D}',
+    'https://www.relogi.in/wp-admin/admin-ajax.php?action=track&docket={D}'
+  ],
+  ['https://www.relogi.in/api/pod?docket={D}'],
+  { Origin: 'https://www.relogi.in', Referer: 'https://www.relogi.in/tracking' }
+  ))(docket, ctx);
 }
 
 // ── Generic aggregator scrape ───────────────────────────────────────────────
@@ -324,52 +507,6 @@ function aggregatorAdapter(couName) {
     const r = await scrapeDeliveryTracker(docket, couName);
     if (!r) throw new Error('No status found on aggregator');
     return r;
-  };
-}
-
-/**
- * Delhivery — public unified-tracking endpoint used by delhivery.com/tracking.
- *
- * UNVERIFIED: this session had no outbound access to dlv-api.delhivery.com, so
- * the response shape below could not be confirmed against a live docket. It is
- * written defensively (every field optional-chained) and the handler degrades
- * the row to a deep link if the call fails or the shape does not match. Confirm
- * with DevTools → Network on delhivery.com/tracking before relying on it.
- */
-async function trackDelhivery(docket) {
-  const res = await fetch(
-    `https://dlv-api.delhivery.com/v3/unified-tracking?wbn=${encodeURIComponent(docket)}`,
-    { headers: { 'User-Agent': UA, Accept: 'application/json', Origin: 'https://www.delhivery.com', Referer: 'https://www.delhivery.com/' } }
-  );
-  if (!res.ok) throw new Error(`Delhivery ${res.status}`);
-  const json = await res.json();
-
-  const shipment = json?.data?.[0] || json?.ShipmentData?.[0]?.Shipment || null;
-  if (!shipment) throw new Error('Unrecognised Delhivery payload');
-
-  const scans = shipment.scans || shipment.Scans || [];
-  const events = scans.map((s) => {
-    const d = s.ScanDetail || s;
-    return {
-      date: d.ScanDateTime || d.scanDateTime || d.scan_date || '',
-      location: d.ScannedLocation || d.scannedLocation || d.location || '',
-      status: d.Instructions || d.instructions || d.scan || d.status || ''
-    };
-  });
-
-  const latest = events[events.length - 1] || {};
-  const status = shipment.status?.status || shipment.Status?.Status || latest.status || '';
-  const isDelivered = /delivered/i.test(status);
-
-  return {
-    success: true,
-    currentStatus: status,
-    latestDate: latest.date || '',
-    latestLocation: latest.location || '',
-    city: (shipment.status?.statusLocation || latest.location || '').split(/[_,(]/)[0].trim(),
-    podUrl: shipment.pod || shipment.POD || '',
-    isDelivered,
-    events
   };
 }
 

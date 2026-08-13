@@ -49,14 +49,22 @@ itself, so a new carrier in next month's register still gets a status attempt.
 upstream hosts — the build environment enforces an egress allowlist. They are
 defensive and fail safe, but the response shapes have not been confirmed.
 
-### Where status comes from
+### Where status and POD come from
 
-Each docket walks a chain of providers; the first with a record wins, and
-anything that errors or has no record hands off to the next:
+**Only carrier-native adapters return POD images.** Ship24, 17track,
+TrackingMore and AfterShip all return scan events only, so the carrier's own
+API is tried first for the three carriers where POD matters:
 
 ```
-Ship24 → 17track → TrackingMore → AfterShip → carrier's own API → HTML aggregator → link
+Delhivery / Safexpress / RE Logistics:
+   carrier API (status + POD) → Ship24 → 17track → TrackingMore → AfterShip
+                              → HTML aggregator → link
+everything else:
+   Ship24 → 17track → TrackingMore → AfterShip → HTML aggregator → link
 ```
+
+If the carrier API answers with a POD it wins outright. If it answers without
+one, the providers still get a look, so a carrier outage never costs status.
 
 A provider is only used when its API key is set, so unconfigured ones cost
 nothing. Order is configurable with `PROVIDER_ORDER`. Every provider that
@@ -80,6 +88,26 @@ API at `api.17track.net`, which needs a free token.
 response** — this build environment blocks egress to all of them. Each parser
 reads defensively and returns nothing rather than guessing, so an unverified
 parser falls through to the next provider instead of showing a wrong status.
+
+### Finding the real carrier endpoints
+
+The carrier-native endpoints in `lib/candidates.js` are guesses — this build
+environment cannot reach any carrier host. `/api/probe` does the DevTools work
+from the deployed site instead, and is designed to be opened on a phone:
+
+```
+https://<your-site>/api/probe?carrier=relogistics&docket=71199373&token=<jwt>
+```
+
+It fetches the carrier's tracking page and its JavaScript bundles, extracts
+every URL that looks like a tracking or POD API, then tries each known
+candidate with a real docket and reports status, content type, size, whether
+the response mentions the docket, and whether it is an image. Add
+`&format=json` for the raw output. Carriers: `delhivery`, `safexpress`,
+`relogistics`.
+
+Getting the token: log in, then in Safari's address bar the session token is in
+`localStorage.jms_jwt` — or call `/api/auth/verify` and copy the token.
 
 ### Verifying an adapter
 

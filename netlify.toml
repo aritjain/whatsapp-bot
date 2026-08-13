@@ -16,6 +16,11 @@
   status = 200
 
 [[redirects]]
+  from = "/api/probe"
+  to = "/.netlify/functions/probe"
+  status = 200
+
+[[redirects]]
   from = "/api/pod-image"
   to = "/.netlify/functions/pod-image"
   status = 200

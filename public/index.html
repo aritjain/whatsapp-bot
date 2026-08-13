@@ -783,7 +783,7 @@ function downloadExcel(){
       'Docket No': r.docket,
       'Docket Date': r.docketDate.replace(/\s+\d{1,2}:\d{2}\s*[AP]M\s*$/i,'').replace(/\s+/g,' '),
       'Carrier Name': r.carrier,
-      'Status': statusInfo(res, row).text,
+      'Status': statusInfo(res, r).text,
       'POD Link': res.podUrl || ''
     };
   });

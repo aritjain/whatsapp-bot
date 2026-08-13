@@ -22,7 +22,8 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const ROUTES = {
   '/api/auth/verify': './netlify/functions/auth.js',
   '/api/track': './netlify/functions/track.js',
-  '/api/pod-image': './netlify/functions/pod-image.js'
+  '/api/pod-image': './netlify/functions/pod-image.js',
+  '/api/probe': './netlify/functions/probe.js'
 };
 
 const MIME = {
