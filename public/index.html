@@ -126,7 +126,34 @@ td.wrap{white-space:normal;min-width:170px}
 .pod-actions{display:flex;gap:8px;justify-content:flex-end}
 .empty-state{text-align:center;padding:60px 20px;color:var(--sub)}
 .empty-state .icon{font-size:3rem;margin-bottom:12px}
-@media(max-width:700px){.header-inner{padding:12px 14px}.container{padding:14px}}
+/* ── Phone layout ──
+   Below 760px the table would need sideways scrolling to reach Status and POD,
+   so each row becomes a stacked card with its column name as the label. */
+@media(max-width:760px){
+  .header-inner{padding:10px 12px;gap:10px}
+  .header-logo{height:40px;width:40px}
+  .header-name{font-size:1rem}
+  .header-sub,.header-title{display:none}
+  .badge{font-size:.68rem;padding:3px 8px}
+  .container{padding:12px}
+  .controls .btn{flex:1 1 auto;justify-content:center}
+  #searchBox{flex:1 1 100%;order:-1;font-size:16px} /* 16px stops iOS zoom-on-focus */
+
+  .table-wrap{max-height:none;overflow:visible;box-shadow:none;background:transparent}
+  table,tbody,tr,td{display:block;width:100%}
+  thead{display:none}
+  tbody tr{background:#fff!important;border:1px solid var(--border);border-radius:10px;
+           margin-bottom:10px;padding:6px 2px;box-shadow:0 1px 6px rgba(27,58,143,.07)}
+  td{white-space:normal;border:none;padding:5px 12px;display:flex;align-items:center;gap:10px}
+  td::before{content:attr(data-label);flex:0 0 42%;color:var(--sub);font-size:.74rem;
+             text-transform:uppercase;letter-spacing:.4px;font-weight:600}
+  td.sn{display:none}
+  td:empty{display:none}
+  /* Buyer name is the row's headline */
+  td[data-label="Buyer"]{font-weight:700;font-size:.95rem;padding-top:8px}
+  td[data-label="Buyer"]::before{display:none}
+  .status-badge{max-width:none}
+}
 </style>
 </head>
 <body>
@@ -227,9 +254,9 @@ td.wrap{white-space:normal;min-width:170px}
           <thead>
             <tr>
               <th>#</th>
-              <th>Date</th>
-              <th>Invoice No</th>
               <th>Buyer Name</th>
+              <th>Invoice No</th>
+              <th>Date</th>
               <th>State</th>
               <th>Docket No</th>
               <th>Docket Date</th>
@@ -534,9 +561,11 @@ function visibleRows(){
   });
 }
 
-function td(text, cls){
+function td(text, cls, label){
   var c = document.createElement('td');
   if(cls) c.className = cls;
+  // data-label drives the stacked card layout on phones (see the media query).
+  if(label) c.setAttribute('data-label', label);
   c.textContent = text == null || text === '' ? '—' : String(text);
   return c;
 }
@@ -551,17 +580,18 @@ function render(){
     var res = results[trackKey(r)];
     var tr = document.createElement('tr');
     tr.appendChild(td(i+1,'sn'));
-    tr.appendChild(td(r.date));
-    tr.appendChild(td(r.invoiceNo));
-    tr.appendChild(td(r.name,'wrap'));
-    tr.appendChild(td(r.state));
-    tr.appendChild(td(r.docket));
+    tr.appendChild(td(r.name,'wrap','Buyer'));
+    tr.appendChild(td(r.invoiceNo,null,'Invoice'));
+    tr.appendChild(td(r.date,null,'Date'));
+    tr.appendChild(td(r.state,null,'State'));
+    tr.appendChild(td(r.docket,null,'Docket'));
     // "Jul  2 2026 12:00AM" → "Jul 2 2026" — the time component is always midnight.
-    tr.appendChild(td(r.docketDate.replace(/\s+\d{1,2}:\d{2}\s*[AP]M\s*$/i,'').replace(/\s+/g,' ')));
-    tr.appendChild(td(r.carrier,'wrap'));
+    tr.appendChild(td(r.docketDate.replace(/\s+\d{1,2}:\d{2}\s*[AP]M\s*$/i,'').replace(/\s+/g,' '),null,'Docket date'));
+    tr.appendChild(td(r.carrier,'wrap','Carrier'));
 
     var si = statusInfo(res);
     var stCell = document.createElement('td');
+    stCell.setAttribute('data-label','Status');
     var badge = document.createElement('span');
     badge.className = 'status-badge '+si.cls;
     badge.textContent = si.text;
@@ -577,6 +607,7 @@ function render(){
     // POD column: the POD itself when we have one, never a "go to carrier site"
     // button. A small ↗ appears only when the automatic lookup failed.
     var podCell = document.createElement('td');
+    podCell.setAttribute('data-label','POD');
     if(res && res.podUrl){
       var view = document.createElement('button');
       view.className='btn-pod'; view.textContent='👁 View';
