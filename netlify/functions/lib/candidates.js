@@ -17,6 +17,7 @@
 const DISCOVERY_PAGES = {
   delhivery: ['https://www.delhivery.com/track-v2/lr/{D}', 'https://www.delhivery.com/'],
   safexpress: ['https://www.safexpress.com/', 'https://www.safexpress.com/track-shipment'],
+  allcargo: ['https://www.allcargologistics.com/track-shipment', 'https://www.allcargologistics.com/'],
   relogistics: ['https://lms.relogi.in/WebTracking/WebTracking.aspx?AwbNo={D}', 'https://lms.relogi.in/']
 };
 
@@ -44,6 +45,13 @@ const CANDIDATES = {
   ],
   relogistics: [
     { kind: 'status', url: 'https://lms.relogi.in/WebTracking/WebTracking.aspx?AwbNo={D}' }
+  ],
+  allcargo: [
+    { kind: 'status', url: 'https://www.allcargologistics.com/api/track-shipment?docketNumber={D}' },
+    { kind: 'status', url: 'https://www.allcargologistics.com/api/tracking?docketNumber={D}' },
+    { kind: 'status', url: 'https://www.allcargologistics.com/api/v1/track?docket={D}' },
+    { kind: 'pod', url: 'https://www.allcargologistics.com/api/pod?docketNumber={D}' },
+    { kind: 'pod', url: 'https://www.allcargologistics.com/api/download-pod?docketNumber={D}' }
   ]
 };
 

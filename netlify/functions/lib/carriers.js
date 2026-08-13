@@ -3,6 +3,7 @@
 const { trackViaProviders } = require('./providers');
 const reLogistics = require('./relogistics');
 const delhivery = require('./delhivery');
+const allcargo = require('./allcargo');
 
 /**
  * Carrier registry.
@@ -63,7 +64,7 @@ const CARRIERS = [
     label: 'Allcargo',
     match: /all\s*cargo/i,
     mode: 'api',
-    adapter: withProviders(aggregatorAdapter('All Cargo Logistics')),
+    adapter: nativeFirst(trackAllcargoNative, withProviders(aggregatorAdapter('All Cargo Logistics'))),
     link: aggregatorLink('All Cargo Logistics')
   },
   {
@@ -199,6 +200,8 @@ const POD_HOST_ALLOWLIST = (process.env.POD_HOST_ALLOWLIST ||
     'www.safexpress.com',
     'safexpress.com',
     'lms.relogi.in',
+    'www.allcargologistics.com',
+    'allcargologistics.com',
     'www.relogi.in',
     'relogi.in'
   ].join(','))
@@ -361,6 +364,10 @@ function nativeAdapter(carrierId, statusUrls, podUrls, headers) {
     }
     return result;
   };
+}
+
+function trackAllcargoNative(docket) {
+  return allcargo.track(docket);
 }
 
 function trackDelhiveryNative(docket) {

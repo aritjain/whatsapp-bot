@@ -3,11 +3,12 @@
 const { verifyRequest, cors, json } = require('./lib/auth-jwt');
 const { POD_HOST_ALLOWLIST } = require('./lib/carriers');
 const reLogistics = require('./lib/relogistics');
+const allcargo = require('./lib/allcargo');
 
 // Carriers whose POD cannot be expressed as a plain URL — an ASP.NET postback,
 // or anything else needing server-side state. The browser asks for
 // ?carrier=<id>&docket=<n> and the resolver returns the bytes.
-const POD_RESOLVERS = { relogistics: reLogistics.fetchPod };
+const POD_RESOLVERS = { relogistics: reLogistics.fetchPod, allcargo: allcargo.fetchPod };
 
 const MAX_BYTES = 12 * 1024 * 1024;
 

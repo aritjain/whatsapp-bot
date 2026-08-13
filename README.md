@@ -40,7 +40,8 @@ Local carriers (own fleet, nothing to look up): **JMS Trading**, **Kent**,
 | RE Logistics | `api` | `lms.relogi.in` portal (ASP.NET, server-rendered) | **Yes** — direct link or WebForms postback |
 | Delhivery | `api` | `delhivery.com/track-v2/lr/<LR>` — embedded page state, then JSON APIs \* | Whatever the payload carries \* |
 | Safexpress | `api` | Guessed endpoint \* | Guessed endpoint \* |
-| Allcargo, R.V. Express | `api` | Aggregator chain | No |
+| Allcargo | `api` | `allcargologistics.com` API (form-driven, no URL route) \* | **Yes** — page offers Download POD |
+| R.V. Express | `api` | Aggregator chain | No |
 | Skyking / Quick India | `api` | First-party APIs (carried over, proven) | Yes |
 | JMS, Kent, SmartShift | `offline` | **Local — never tracked** | — |
 | blank carrier | `offline` | Never tracked | — |
@@ -82,6 +83,11 @@ provider answered. The carrier's own wording is kept and shown in the tooltip.
 
 If everything fails, the row shows "Lookup failed" with a small ↗ to the
 tracking page. There is no "go to carrier site" button in the normal path.
+
+Allcargo's tracking page posts the docket through a form rather than putting it
+in the URL, so there is no page to GET — the result comes from an API the page
+calls. The adapter tries GET and POST candidates with several body field names;
+the real route can be found with `/api/probe?carrier=allcargo`.
 
 Delhivery's `track-v2` route is keyed by **LR number**, which is exactly what
 the register's DOCKET NO column holds, so the URL is built straight from the
