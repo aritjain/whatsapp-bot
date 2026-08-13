@@ -28,19 +28,22 @@ Log in with the access key or a 6-digit authenticator code.
 |---|---|
 | `api` | Server fetches status automatically |
 | `link` | Deep link only |
-| `offline` | Never tracked |
+| `offline` | Local delivery — never tracked |
+
+Local carriers (own fleet, nothing to look up): **JMS Trading**, **Kent**,
+**SmartShift**. Their rows read `Local` and never hit the network.
 
 | Carrier | Mode | How status is fetched |
 |---|---|---|
-| Delhivery | `api` | `dlv-api.delhivery.com` unified-tracking \* |
-| RE Logistics | `api` | Aggregator scrape |
-| Safexpress | `api` | Aggregator scrape \* |
-| SmartShift | `api` | Aggregator scrape \* |
-| Allcargo | `api` | Aggregator scrape \* |
-| R.V. Express | `api` | Aggregator scrape \* |
-| Skyking / Quick India | `api` | First-party APIs (carried over, proven) |
-| **JMS Trading Services** | `offline` | **Never tracked** |
-| blank carrier | `offline` | Never tracked |
+| Carrier | Mode | Status source | POD |
+|---|---|---|---|
+| RE Logistics | `api` | `lms.relogi.in` portal (ASP.NET, server-rendered) | **Yes** — direct link or WebForms postback |
+| Delhivery | `api` | `dlv-api.delhivery.com` \* | Guessed endpoint \* |
+| Safexpress | `api` | Guessed endpoint \* | Guessed endpoint \* |
+| Allcargo, R.V. Express | `api` | Aggregator chain | No |
+| Skyking / Quick India | `api` | First-party APIs (carried over, proven) | Yes |
+| JMS, Kent, SmartShift | `offline` | **Local — never tracked** | — |
+| blank carrier | `offline` | Never tracked | — |
 
 Unrecognised carrier names are also tried through the aggregator using the name
 itself, so a new carrier in next month's register still gets a status attempt.
@@ -79,6 +82,12 @@ provider answered. The carrier's own wording is kept and shown in the tooltip.
 
 If everything fails, the row shows "Lookup failed" with a small ↗ to the
 tracking page. There is no "go to carrier site" button in the normal path.
+
+RE Logistics runs Sagar Informatics' LMS on ASP.NET WebForms, so its POD link
+is often `__doPostBack(...)` rather than a URL. `lib/aspnet.js` replays that
+postback server-side, carrying `__VIEWSTATE` and `__EVENTVALIDATION`, and the
+POD proxy streams the bytes back — the browser asks for
+`/api/pod-image?carrier=relogistics&docket=<n>` and never sees the form state.
 
 Note that `m.17track.net` is the mobile web app and renders results
 client-side, so it cannot be fetched server-side; the integration uses their

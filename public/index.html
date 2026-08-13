@@ -546,7 +546,7 @@ function statusInfo(res, row){
   // otherwise sit on "Pending" forever.
   if(row && !row.docket) return { cls:'s-offline', text:'No docket number' };
   if(!res) return { cls:'s-pending', text:'Pending' };
-  if(res.mode === 'offline') return { cls:'s-offline', text:'Not tracked' };
+  if(res.mode === 'offline') return { cls:'s-offline', text: res.currentStatus || 'Local' };
   if(res.success === false)  return { cls:'s-error', text: res.error || 'Lookup failed' };
   if(res.linkOnly)           return { cls:'s-error', text:'Lookup failed' };
   var t = res.status || res.currentStatus || '—';
@@ -611,13 +611,14 @@ function render(){
     // button. A small ↗ appears only when the automatic lookup failed.
     var podCell = document.createElement('td');
     podCell.setAttribute('data-label','POD');
-    if(res && res.podUrl){
+    var podRef = res && (res.podFetch || res.podUrl);
+    if(podRef){
       var view = document.createElement('button');
       view.className='btn-pod'; view.textContent='👁 View';
-      view.onclick = function(){ viewPOD(res.podUrl, r.docket); };
+      view.onclick = function(){ viewPOD(podRef, r.docket); };
       var dl = document.createElement('button');
       dl.className='btn-pod btn-pod-dl'; dl.textContent='⬇';
-      dl.onclick = function(){ dlPOD(res.podUrl, r.docket); };
+      dl.onclick = function(){ dlPOD(podRef, r.docket); };
       podCell.appendChild(view); podCell.appendChild(dl);
     } else if(res && (res.linkOnly || res.success===false) && res.trackingLink){
       var a = document.createElement('a');
@@ -690,7 +691,7 @@ async function trackAll(){
   $('progressArea').style.display='none';
   btn.disabled=false; btn.textContent='↻ Re-Track';
   $('btnExcel').disabled=false;
-  $('btnPODs').disabled = !Object.keys(results).some(function(k){ return results[k].podUrl; });
+  $('btnPODs').disabled = !Object.keys(results).some(function(k){ return results[k].podFetch || results[k].podUrl; });
   renderStats();
   render();
 }
@@ -707,7 +708,7 @@ function renderStats(){
   var by = function(s){ return all.filter(function(r){ return r.status===s; }).length; };
   var offline = all.filter(function(r){ return r.mode==='offline'; }).length;
   var failed  = all.filter(function(r){ return r.mode!=='offline' && (r.linkOnly || r.success===false); }).length;
-  var pods    = all.filter(function(r){ return r.podUrl; }).length;
+  var pods    = all.filter(function(r){ return r.podFetch || r.podUrl; }).length;
 
   var row = $('statsRow');
   row.style.display='flex';
@@ -717,15 +718,17 @@ function renderStats(){
     '<span class="pill pill-orange">🚚 Out for delivery: '+by('Out for Delivery')+'</span>'+
     '<span class="pill pill-blue">🔄 In transit: '+(by('In Transit')+by('Picked Up')+by('Booked'))+'</span>'+
     (by('Undelivered') ? '<span class="pill pill-red">↩ Undelivered: '+by('Undelivered')+'</span>' : '')+
-    '<span class="pill pill-grey">🏠 Not tracked: '+offline+'</span>'+
+    '<span class="pill pill-grey">🏠 Local: '+offline+'</span>'+
     (failed ? '<span class="pill pill-red">❌ Lookup failed: '+failed+'</span>' : '')+
     '<span class="pill pill-grey">📎 PODs: '+pods+'</span>';
 }
 
 // ── POD ──
-async function fetchPod(url, docket){
-  return fetch('/api/pod-image?url='+encodeURIComponent(url)+'&docket='+encodeURIComponent(docket),
-    { headers:{ 'Authorization':'Bearer '+JWT } });
+async function fetchPod(ref, docket){
+  // ref is the server-supplied podFetch path, or a plain POD URL.
+  var url = /^\/api\//.test(ref) ? ref
+          : '/api/pod-image?url='+encodeURIComponent(ref)+'&docket='+encodeURIComponent(docket);
+  return fetch(url, { headers:{ 'Authorization':'Bearer '+JWT } });
 }
 async function viewPOD(url, docket){
   currentPod = { url:url, docket:docket };
@@ -759,9 +762,10 @@ $('btnPODs').onclick = async function(){
   var seen = {};
   for(var i=0;i<rows.length;i++){
     var r = rows[i], res = results[trackKey(r)];
-    if(res && res.podUrl && !seen[r.docket]){
+    var ref = res && (res.podFetch || res.podUrl);
+    if(ref && !seen[r.docket]){
       seen[r.docket]=1;
-      await dlPOD(res.podUrl, r.docket);
+      await dlPOD(ref, r.docket);
       await new Promise(function(f){ setTimeout(f,300); });
     }
   }
@@ -784,7 +788,7 @@ function downloadExcel(){
       'Docket Date': r.docketDate.replace(/\s+\d{1,2}:\d{2}\s*[AP]M\s*$/i,'').replace(/\s+/g,' '),
       'Carrier Name': r.carrier,
       'Status': statusInfo(res, r).text,
-      'POD Link': res.podUrl || ''
+      'POD Link': res.podUrl || (res.podAvailable ? (res.podPageUrl || res.trackingLink || '') : '')
     };
   });
 

@@ -87,12 +87,22 @@ async function trackOne({ docket, carrier: rawCarrier }, ctx) {
     }
     // Canonical status for the report; the carrier's own wording is kept too.
     const status = normaliseStatus(r.currentStatus);
+    // podFetch is the exact path the browser should call: a direct URL goes
+    // through the proxy, while a carrier-resolved POD is fetched server-side.
+    let podFetch = '';
+    if (r.podUrl) {
+      podFetch = `/api/pod-image?url=${encodeURIComponent(r.podUrl)}&docket=${encodeURIComponent(docketNo)}`;
+    } else if (r.podAvailable) {
+      podFetch = `/api/pod-image?carrier=${encodeURIComponent(carrier.id)}&docket=${encodeURIComponent(docketNo)}`;
+    }
+
     return {
       ...base,
       success: true,
       tracked: true,
       trackingLink: link,
       ...r,
+      podFetch,
       status,
       rawStatus: r.currentStatus || '',
       currentStatus: status || r.currentStatus || '',

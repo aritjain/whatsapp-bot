@@ -1,6 +1,7 @@
 'use strict';
 
 const { trackViaProviders } = require('./providers');
+const reLogistics = require('./relogistics');
 
 /**
  * Carrier registry.
@@ -57,14 +58,6 @@ const CARRIERS = [
     altLinks: [{ label: 'safexpress.com', url: () => 'https://www.safexpress.com/' }]
   },
   {
-    id: 'smartshift',
-    label: 'SmartShift',
-    match: /smart\s*shift/i,
-    mode: 'api',
-    adapter: withProviders(aggregatorAdapter('Smartshift Logistics Solutions')),
-    link: aggregatorLink('Smartshift Logistics Solutions')
-  },
-  {
     id: 'allcargo',
     label: 'Allcargo',
     match: /all\s*cargo/i,
@@ -91,22 +84,29 @@ const CARRIERS = [
     link: aggregatorLink('RV Express')
   },
 
-  // ── Not tracked ───────────────────────────────────────────────────────────
-  // Own-fleet / offline delivery. For both of these the "docket number" is the
-  // invoice number itself, so there is nothing to look up.
+  // ── Local delivery — never tracked ────────────────────────────────────────
+  // Own-fleet deliveries. Their "docket numbers" are usually the invoice
+  // numbers, so there is nothing to look up.
   {
     id: 'jms',
-    label: 'JMS Trading (offline)',
+    label: 'JMS Trading (local)',
     match: /jms\s*trading/i,
     mode: 'offline',
-    offlineNote: 'Offline delivery — not tracked'
+    offlineNote: 'Local'
   },
   {
     id: 'kent',
-    label: 'Kent (offline)',
+    label: 'Kent (local)',
     match: /^kent\b/i,
     mode: 'offline',
-    offlineNote: 'Offline delivery — not tracked'
+    offlineNote: 'Local'
+  },
+  {
+    id: 'smartshift',
+    label: 'SmartShift (local)',
+    match: /smart\s*shift/i,
+    mode: 'offline',
+    offlineNote: 'Local'
   },
 
   // ── Carried over from the Skyking build; proven adapters, kept so that a
@@ -197,6 +197,7 @@ const POD_HOST_ALLOWLIST = (process.env.POD_HOST_ALLOWLIST ||
     'www.delhivery.com',
     'www.safexpress.com',
     'safexpress.com',
+    'lms.relogi.in',
     'www.relogi.in',
     'relogi.in'
   ].join(','))
@@ -229,7 +230,9 @@ function nativeFirst(native, fallback) {
   return async (docket, ctx) => {
     try {
       const r = await native(docket, ctx);
-      if (r && r.podUrl) return { ...r, source: 'carrier' };
+      // podAvailable covers PODs that have no plain URL (e.g. an ASP.NET
+      // postback); checking podUrl alone silently dropped those.
+      if (r && (r.podUrl || r.podAvailable)) return { ...r, source: 'carrier' };
       if (r) {
         // Status but no POD: prefer it only if nothing else answers.
         const viaProvider = await trackViaProviders(docket, ctx);
@@ -385,17 +388,8 @@ function trackSafexpressNative(docket, ctx) {
   ))(docket, ctx);
 }
 
-function trackReLogisticsNative(docket, ctx) {
-  return lazyNative('trackReLogisticsNative', () => nativeAdapter(
-  'relogistics',
-  [
-    'https://www.relogi.in/api/tracking?docket={D}',
-    'https://www.relogi.in/api/v1/track/{D}',
-    'https://www.relogi.in/wp-admin/admin-ajax.php?action=track&docket={D}'
-  ],
-  ['https://www.relogi.in/api/pod?docket={D}'],
-  { Origin: 'https://www.relogi.in', Referer: 'https://www.relogi.in/tracking' }
-  ))(docket, ctx);
+function trackReLogisticsNative(docket) {
+  return reLogistics.track(docket);
 }
 
 // ── Generic aggregator scrape ───────────────────────────────────────────────
