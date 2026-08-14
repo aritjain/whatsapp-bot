@@ -182,10 +182,21 @@ async function scopeSnapshot(user) {
   const mine = tasks.filter((t) => t.contactId && t.contactId === user.contactId);
   const gids = new Set(mine.map((t) => t.groupId));
   const own = contacts.find((c) => c.id === user.contactId);
+  // display names only (first name) for users referenced by the member's own tasks
+  const uids = new Set();
+  for (const t of mine) {
+    if (t.createdBy) uids.add(t.createdBy);
+    if (t.verifiedBy) uids.add(t.verifiedBy);
+    for (const a of (t.activity || [])) if (a.uid) uids.add(a.uid);
+  }
+  const users = await readDoc(DOCS.users, []);
+  const names = {};
+  for (const u of users) if (uids.has(u.id)) names[u.id] = String(u.name || '').split(/\s+/)[0];
   return {
     groups: groups.filter((g) => gids.has(g.id)).map((g) => ({ id: g.id, name: g.name, type: g.type, color: g.color })),
     contacts: own ? [own] : [],
     tasks: mine,
+    names,
   };
 }
 async function syncResponse(user) {
@@ -470,7 +481,9 @@ async function handleImport(req, user) {
 
   await casWrite(DOCS.groups, [], (cur) => mergeById(cur, incoming.groups, 'groups'));
   await casWrite(DOCS.tasks, [], (cur) => mergeById(cur, incoming.tasks.map((t) => ({
-    ...t, contactId: t.contactId ? (contactRemap[t.contactId] || t.contactId) : null,
+    ...t,
+    contactId: t.contactId ? (contactRemap[t.contactId] || t.contactId) : null,
+    createdBy: t.createdBy || user.id,
   })), 'tasks'));
   await casWrite(DOCS.personal, [], (cur) => mergeById(cur, incoming.personal, 'personal'));
   await casWrite(DOCS.phonebook, [], (pb) => {
