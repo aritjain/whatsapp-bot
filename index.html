@@ -454,7 +454,10 @@ function applyLocal(op){
     if(i>=0) col[i]={...col[i],...op.rec}; else col.push(op.col==='tasks'?{createdAt:Date.now(),remindCount:0,activity:[{ts:Date.now(),uid:me().id,type:'created'}],...op.rec}:op.rec); }
   else if(op.t==='delete'){ if(db[op.col]) db[op.col]=db[op.col].filter(r=>r.id!==op.id); }
 }
-function mutate(ops){ ops.forEach(applyLocal); saveCache(); rerender(); enqueue(ops); }
+let sheetRefresh=null;
+function mutate(ops){ ops.forEach(applyLocal); saveCache(); rerender();
+  if(sheetRefresh&&$('#modal').classList.contains('show')) sheetRefresh();
+  enqueue(ops); }
 
 /* ================= auth screens ================= */
 function renderLogin(mode){
@@ -541,7 +544,27 @@ async function uploadLocalV1(){
     const resp=await api('/import',{method:'POST',body:{data:old}});
     applySnapshot(resp); localStorage.setItem('jms_v2_migrated','1');
     closeModal(); rerender(); toast('Merged: '+resp.report.merged.tasks.added+' new tasks, '+resp.report.merged.contacts.added+' contacts','ok');
+    setTimeout(offerDeadlineBackfill,600);
   }catch(e){ toast(e.message,'err'); }
+}
+function offerDeadlineBackfill(){
+  const missing=db.tasks.filter(t=>t.status!=='done'&&!t.deadline&&t.priority!=='P4');
+  if(!missing.length) return;
+  showModal2(`<h3>Set deadlines on imported tasks?</h3>
+    <div class="sub">${missing.length} open task${missing.length>1?'s have':' has'} no deadline, so Overdue and Due-today stay empty.
+    Apply defaults from priority — P1 tomorrow · P2 +7 days · P3 +30 days? (P4 stays open-ended. You can change any of them later.)</div>
+    <div class="sheet-actions"><button class="btn ghost" onclick="closeModal2()">Skip</button>
+    <button class="btn" onclick="applyDeadlineBackfill()">Set deadlines</button></div>`);
+}
+function applyDeadlineBackfill(){
+  closeModal2();
+  const addDays={P1:1,P2:7,P3:30};
+  const ops=db.tasks.filter(t=>t.status!=='done'&&!t.deadline&&addDays[t.priority]).map(t=>{
+    const d=new Date(Date.now()+addDays[t.priority]*DAY); d.setHours(18,0,0,0);
+    const {activity,...rest}=t;
+    return {t:'upsert',col:'tasks',rec:{...rest,deadline:toLocalInput(d),updatedAt:Date.now()}};
+  });
+  mutate(ops); toast(ops.length+' deadlines set','ok');
 }
 
 /* ================= shell / nav ================= */
@@ -714,8 +737,8 @@ function remindAll(cid){
 
 /* ================= CHASE ================= */
 let chaseFilter='all', chaseSel=new Set(), chaseForced=new Set();
-function remindedToday(c){ const ts=Math.max(0,...chaseTasksFor(c.id).map(t=>t.lastRemindedAt||0));
-  return ts&&new Date(ts).toDateString()===new Date().toDateString(); }
+function remindedToday(c){ const ts=chaseTasksFor(c.id);
+  return ts.length>0&&ts.every(t=>t.lastRemindedAt&&new Date(t.lastRemindedAt).toDateString()===new Date().toDateString()); }
 function chaseRows(){
   const myCid=me().contactId;
   let rows=db.contacts.filter(c=>c.id!==myCid&&chaseTasksFor(c.id).length);
@@ -733,11 +756,13 @@ function renderChase(){
   const allRows=db.contacts.filter(c=>c.id!==me().contactId&&chaseTasksFor(c.id).length);
   const totOpen=db.tasks.filter(t=>t.status==='open'||t.status==='inprogress').length;
   const totOver=db.tasks.filter(isOverdue).length;
-  header('Chase Queue',`${allRows.length} people · ${totOpen} open · ${totOver} overdue`,
+  const totVerif=db.tasks.filter(t=>t.status==='awaiting_verify').length;
+  header('Chase Queue',`${allRows.length} people · ${totOpen} open · ${totOver} overdue${totVerif?` · ${totVerif} to verify`:''}`,
     `<button class="hbtn" onclick="go('dash')">📊</button>`);
   for(const id of [...chaseSel]) if(!rows.some(r=>r.c.id===id)) chaseSel.delete(id);
   const filters=[['all','Everyone'],['overdue','Overdue'],['old','7d+ old'],['notToday','Not reminded today']];
-  let html=`<div class="filters">${filters.map(([k,l])=>`<div class="fchip ${chaseFilter===k?'sel':''}" onclick="chaseFilter='${k}';rerender()">${l}</div>`).join('')}</div>`;
+  let html=totVerif?`<div class="hint warnbox" style="margin:0 0 10px;cursor:pointer;font-weight:700" onclick="fMisc='verify';fGroup='all';go('tasks')">⏳ ${totVerif} task${totVerif>1?'s':''} waiting for your verification — tap to review</div>`:'';
+  html+=`<div class="filters">${filters.map(([k,l])=>`<div class="fchip ${chaseFilter===k?'sel':''}" onclick="chaseFilter='${k}';rerender()">${l}</div>`).join('')}</div>`;
   if(!rows.length){
     html+= allRows.length? `<div class="empty"><div class="big">🔍</div>No one matches this filter.<br><button class="btn ghost" onclick="chaseFilter='all';rerender()">Show everyone</button></div>`
       : `<div class="empty"><div class="big">🎉</div>Sab clear! No one owes you anything today.<br><button class="btn" onclick="go('assign')">Assign a task</button></div>`;
@@ -793,11 +818,13 @@ function renderChaseBar(){
 function showActionbar(html){ $('#actionbarInner').innerHTML=html; $('#actionbar').classList.add('show'); document.body.classList.add('has-actionbar'); }
 function hideActionbar(){ $('#actionbar').classList.remove('show'); document.body.classList.remove('has-actionbar'); }
 function openContactTasks(cid){
-  const c=contactById(cid); const ts=openTasksFor(cid);
+  const c=contactById(cid); if(!c){ closeModal(); return; }
+  const ts=openTasksFor(cid);
   showModal(`<h3>${esc(c.name)}</h3><div class="sub">${esc(c.phone)} · ${ts.length} open</div>
     <div style="margin-top:10px">${ts.map(t=>taskCard(t)).join('')||'<div class="empty">Nothing open.</div>'}</div>
     <div class="sheet-actions"><button class="btn ghost" onclick="closeModal()">Close</button>
     ${c.phoneOk?`<button class="btn wa" onclick="closeModal();remindAll('${cid}')">📤 Remind now</button>`:''}</div>`);
+  sheetRefresh=()=>openContactTasks(cid);
 }
 
 /* chase stepper */
@@ -1095,18 +1122,24 @@ let contactSearch='';
 function renderContacts(){
   const withOpen=db.contacts.filter(c=>openTasksFor(c.id).length).length;
   header('People',`${db.contacts.length} contacts · ${withOpen} with open tasks`,`<button class="hbtn" onclick="openAddContact()">➕</button>`);
-  const q=contactSearch.trim().toLowerCase();
-  const list=db.contacts.filter(c=>!q||c.name.toLowerCase().includes(q)||normPhone(c.phone).includes(q.replace(/\D/g,'')||'§'))
-    .sort((a,b)=>openTasksFor(b.id).length-openTasksFor(a.id).length||a.name.localeCompare(b.name));
-  let html=`<div class="row2" style="margin-bottom:10px">
+  $('#v-contacts').innerHTML=`<div class="row2" style="margin-bottom:10px">
       <button class="btn sm" onclick="openAddContact()">+ Add person</button>
       <button class="btn ghost sm" onclick="openAddGroup()">+ Company/Dept</button></div>
     <input type="search" placeholder="Search name or number…" value="${esc(contactSearch)}" style="margin-bottom:12px"
-      oninput="contactSearch=this.value;rerender()">`;
-  if(!db.contacts.length) html+=`<div class="empty"><div class="big">👥</div>No contacts yet.<br><button class="btn" onclick="openAddContact()">Add your first person</button></div>`;
-  else if(!list.length) html+=`<div class="empty"><div class="big">🔍</div>No one by that name or number.</div>`;
-  else html+=list.map(c=>{
-    const open=openTasksFor(c.id);
+      oninput="contactSearch=this.value;renderContactListOnly()">
+    <div id="contactList"></div>`;
+  renderContactListOnly();
+}
+function renderContactListOnly(){
+  const el=$('#contactList'); if(!el) return;
+  const q=contactSearch.trim().toLowerCase();
+  const list=db.contacts.filter(c=>!q||c.name.toLowerCase().includes(q)||normPhone(c.phone).includes(q.replace(/\D/g,'')||'§'))
+    .sort((a,b)=>openTasksFor(b.id).length-openTasksFor(a.id).length||a.name.localeCompare(b.name));
+  let html='';
+  if(!db.contacts.length) html=`<div class="empty"><div class="big">👥</div>No contacts yet.<br><button class="btn" onclick="openAddContact()">Add your first person</button></div>`;
+  else if(!list.length) html=`<div class="empty"><div class="big">🔍</div>No one by that name or number.</div>`;
+  else html=list.map(c=>{
+    const open=chaseTasksFor(c.id);
     const g0=groupById((c.memberships[0]||{}).groupId);
     return `<div class="contact-card">
       <div class="cc-top">
@@ -1123,7 +1156,7 @@ function renderContacts(){
         <button class="ic" onclick="fGroup='all';fMisc='all';taskSearch='${esc(c.name)}';go('tasks')">📋 Tasks</button>
       </div></div>`;
   }).join('');
-  $('#v-contacts').innerHTML=html;
+  el.innerHTML=html;
 }
 function openContactSheet(id){
   const c=contactById(id);
@@ -1301,13 +1334,13 @@ function renderAdmin(){
   $('#v-admin').innerHTML=users.length?users.map(u=>{
     const c=contactById(u.contactId);
     const isMe=u.id===me().id;
-    return `<div class="rowitem" style="opacity:${u.disabled?'.55':'1'}" onclick="${isMe?'':'openUserSheet(\''+u.id+'\')'}">
+    return `<div class="rowitem" style="opacity:${u.disabled?'.55':'1'}" onclick="${isMe?'openSelfSheet()':'openUserSheet(\''+u.id+'\')'}">
       <div class="avatar" style="width:38px;height:38px;background:${u.role==='admin'?'#4338ca':'#475569'}">${esc((u.name[0]||'?').toUpperCase())}</div>
       <div class="ri-main"><div class="ri-t">${esc(u.name)} ${isMe?'<span class="tag who">YOU · ADMIN</span>':''}</div>
         <div class="ri-s">${esc(u.phone)}${c?' · linked to '+esc(firstName(c.name)):' · no contact linked'}</div></div>
       <span style="font-size:0.72rem;font-weight:700;color:${u.disabled?'var(--ink-4)':'var(--ok-ink)'}">
         <span class="statusdot" style="background:${u.disabled?'var(--ink-4)':'var(--ok)'}"></span>${u.disabled?'Disabled':'Active'}</span>
-      ${isMe?'':'<span class="ri-x">⋯</span>'}</div>`;
+      <span class="ri-x">⋯</span></div>`;
   }).join('')
   :`<div class="empty"><div class="big">🔑</div>No staff logins yet.<br><button class="btn" onclick="openCreateUser()">Create the first one</button></div>`;
 }
@@ -1367,6 +1400,22 @@ async function resetUserPw(uid_){
       <div class="row2"><button class="btn ghost sm" onclick="navigator.clipboard&&navigator.clipboard.writeText('${pw}');toast('Copied','ok')">📋 Copy</button>
       <button class="btn wa sm" onclick="sendResetWa('${uid_}','${pw}')">📤 WhatsApp</button></div>
       <div class="sheet-actions"><button class="btn" onclick="closeModal()">Done</button></div>`);
+  }catch(e){ toast(e.message,'err'); }
+}
+function openSelfSheet(){
+  const u=me();
+  const opts=`<option value="">— none —</option>`+db.contacts.map(c=>`<option value="${c.id}" ${u.contactId===c.id?'selected':''}>${esc(c.name)} · ${esc(c.phone)}</option>`).join('');
+  showModal(`<h3>Your account</h3>
+    <div class="sub">Tasks assigned to your linked contact appear under "On my own plate" on the Dashboard and are kept out of the Chase Queue.</div>
+    <label class="f">Linked contact (you)</label><select id="selfContact">${opts}</select>
+    <div class="sheet-actions"><button class="btn ghost" onclick="closeModal()">Cancel</button>
+    <button class="btn" onclick="saveSelfLink()">Save</button></div>`);
+}
+async function saveSelfLink(){
+  try{ const r=await api('/users',{method:'POST',body:{action:'update',userId:me().id,contactId:$('#selfContact').value||null}});
+    db.users=r.users; const fresh=r.users.find(x=>x.id===me().id);
+    if(fresh){ session.user.contactId=fresh.contactId; localStorage.setItem('jms_v2_session',JSON.stringify(session)); }
+    saveCache(); closeModal(); rerender(); toast('Updated','ok');
   }catch(e){ toast(e.message,'err'); }
 }
 function sendResetWa(uid_,pw){
@@ -1467,6 +1516,7 @@ async function doImport(){
     applySnapshot(resp); closeModal(); rerender();
     const m=resp.report.merged;
     toast(`Merged: +${m.tasks?m.tasks.added:0} tasks, +${m.contacts?m.contacts.added:0} contacts`,'ok');
+    setTimeout(offerDeadlineBackfill,600);
   }catch(e){ toast(e.message,'err'); }
   window._pendingImport=null;
 }
@@ -1524,8 +1574,8 @@ function syncAllToCalendar(){
 }
 
 /* ================= modals + history ================= */
-function showModal(html){ $('#sheet').innerHTML=html; $('#modal').classList.add('show'); }
-function closeModal(){ $('#modal').classList.remove('show'); }
+function showModal(html){ sheetRefresh=null; $('#sheet').innerHTML=html; $('#modal').classList.add('show'); }
+function closeModal(){ sheetRefresh=null; $('#modal').classList.remove('show'); }
 function showModal2(html){ $('#sheet2').innerHTML=html; $('#modal2').classList.add('show'); }
 function closeModal2(){ $('#modal2').classList.remove('show'); }
 $('#modal').onclick=e=>{ if(e.target.id==='modal') closeModal(); };
