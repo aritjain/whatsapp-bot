@@ -326,6 +326,8 @@ textarea{ resize:vertical; min-height:72px; }
 /* ================= helpers ================= */
 const $=s=>document.querySelector(s);
 const esc=s=>(s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* for strings interpolated into onclick JS: backslash-escape for JS first, then HTML-escape */
+const jsEsc=s=>esc(String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/\r?\n/g,' '));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 /* keep normPhone/phoneOk textually identical to netlify/functions/api.mjs */
 function normPhone(raw){
@@ -413,6 +415,7 @@ function applySnapshot(resp){
   saveCache();
 }
 async function pull(){
+  if(pushing||outbox.length){ flush(); return; } // never let a stale GET race queued writes
   try{ const resp=await api('/sync'); applySnapshot(resp); setSync('synced'); hideOffline(); rerender(); }
   catch(e){ if(!navigator.onLine||/fetch/i.test(e.message)) { setSync('offline'); showOffline(); } }
 }
@@ -426,7 +429,9 @@ async function flush(){
   try{
     const resp=await api('/push',{method:'POST',body:{ops:batch}});
     outbox=outbox.slice(batch.length);
-    applySnapshot(resp); setSync(outbox.length?'pending':'synced'); hideOffline();
+    applySnapshot(resp);
+    outbox.forEach(applyLocal); // re-apply ops queued while the push was in flight
+    setSync(outbox.length?'pending':'synced'); hideOffline();
     if(resp.rejected&&resp.rejected.length) toast(resp.rejected.length+' change(s) rejected by server','err');
     rerender();
   }catch(e){
@@ -438,14 +443,18 @@ async function flush(){
 }
 function showOffline(){ const b=$('#offlineBar'); b.textContent='📴 Offline — '+(outbox.length? outbox.length+' change(s) saved on this phone':'showing saved data'); b.classList.add('show'); }
 function hideOffline(){ $('#offlineBar').classList.remove('show'); }
-window.addEventListener('online',()=>{ flush(); pull(); });
-document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&session){ flush(); } });
+window.addEventListener('online',()=>{ if(session) pull(); });
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&session) pull(); });
 
 /* optimistic local application */
 function applyLocal(op){
   const find=id=>db.tasks.find(t=>t.id===id);
-  if(op.t==='status'){ const t=find(op.id); if(t){ t.status=op.to; t.doneAt=op.to==='done'?Date.now():null;
-      t.updatedAt=Date.now(); (t.activity=t.activity||[]).push({ts:Date.now(),uid:me().id,type:'status',data:{to:op.to}}); } }
+  if(op.t==='status'){ const t=find(op.id); if(t){
+      (t.activity=t.activity||[]).push({ts:Date.now(),uid:me().id,type:'status',data:{to:op.to}});
+      if(op.to==='done'&&op.roll&&op.nextDeadline){ t.deadline=op.nextDeadline; t.status='open'; t.doneAt=null;
+        t.activity.push({ts:Date.now(),uid:me().id,type:'recurred'}); }
+      else { t.status=op.to; t.doneAt=op.to==='done'?Date.now():null; }
+      t.updatedAt=Date.now(); } }
   else if(op.t==='comment'){ const t=find(op.id); if(t){ (t.activity=t.activity||[]).push({ts:Date.now(),uid:me().id,type:'comment',data:{text:op.text}}); } }
   else if(op.t==='remind'){ for(const id of op.ids){ const t=find(id); if(t){ t.lastRemindedAt=Date.now(); t.remindCount=(t.remindCount||0)+1;
       (t.activity=t.activity||[]).push({ts:Date.now(),uid:me().id,type:'reminded'}); } } }
@@ -476,7 +485,7 @@ function renderLogin(mode){
         <label class="f">Mobile number</label><input id="bPhone" type="tel" inputmode="tel" placeholder="+91 98765 43210" oninput="phonePreview('bPhone','bPrev')">
         <div class="hint" id="bPrev"></div>
         <label class="f">Password</label>
-        <div class="pwrow"><input id="bPw" type="password" placeholder="8+ characters"><button class="eye" onclick="togglePw('bPw')">👁</button></div>
+        <div class="pwrow"><input id="bPw" type="password" placeholder="10+ characters"><button class="eye" onclick="togglePw('bPw')">👁</button></div>
         <label class="f">Confirm password</label><input id="bPw2" type="password">
         <button class="btn" style="margin-top:16px" onclick="doBootstrap()">Create admin &amp; continue</button>
         <div class="hint warnbox" style="margin-top:12px">ⓘ Save this password. There is no self-service reset for admin.</div>
@@ -502,7 +511,7 @@ async function doBootstrap(){
   const name=$('#bName').value.trim(), phone=$('#bPhone').value.trim(), pw=$('#bPw').value, pw2=$('#bPw2').value;
   const err=$('#bErr');
   if(!name||!normPhone(phone)) return err.textContent='Enter your name and mobile number.';
-  if(pw.length<8) return err.textContent='Password needs 8+ characters.';
+  if(pw.length<10) return err.textContent='Password needs 10+ characters.';
   if(pw!==pw2) return err.textContent='Passwords do not match.';
   try{ const resp=await api('/bootstrap',{method:'POST',body:{name,phone,password:pw}});
     session={token:resp.token,user:resp.user}; localStorage.setItem('jms_v2_session',JSON.stringify(session));
@@ -519,7 +528,18 @@ async function doLogin(ev){
   }catch(e){ $('#lErr').textContent=e.message; btn.textContent='Sign in'; btn.disabled=false; }
   return false;
 }
+function confirmLogout(){
+  if(outbox.length){
+    showModal2(`<h3>You have ${outbox.length} unsynced change${outbox.length>1?'s':''}</h3>
+      <div class="sub">Logging out now will discard them. Get back online first, or log out anyway.</div>
+      <div class="sheet-actions"><button class="btn ghost" onclick="closeModal2()">Stay</button>
+      <button class="btn dangerbtn" onclick="closeModal2();logout()">Log out anyway</button></div>`);
+    return;
+  }
+  logout();
+}
 function logout(silent){
+  if(session){ localStorage.removeItem('jms_v2_cache_'+session.user.id); localStorage.removeItem('jms_v2_outbox_'+session.user.id); }
   session=null; localStorage.removeItem('jms_v2_session'); phonebook=null;
   db={groups:[],contacts:[],tasks:[],personal:[],users:[]}; outbox=[];
   closeModal(); closeModal2();
@@ -543,6 +563,7 @@ async function uploadLocalV1(){
   try{ const old=JSON.parse(localStorage.getItem('jms_cos_v1'));
     const resp=await api('/import',{method:'POST',body:{data:old}});
     applySnapshot(resp); localStorage.setItem('jms_v2_migrated','1');
+    localStorage.removeItem('jms_cos_v1'); // server holds it now; don't leave the phonebook on-device
     closeModal(); rerender(); toast('Merged: '+resp.report.merged.tasks.added+' new tasks, '+resp.report.merged.contacts.added+' contacts','ok');
     setTimeout(offerDeadlineBackfill,600);
   }catch(e){ toast(e.message,'err'); }
@@ -596,6 +617,7 @@ function header(title,sub,extraBtn){
     <div class="hbtns">${extraBtn||''}<span class="syncdot ${syncState==='synced'?'':syncState}" id="syncDot" onclick="openMore()"></span></div></div>`;
 }
 function go(v){
+  if(currentView&&currentView!==v) history.pushState({v:currentView},'');
   currentView=v;
   document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
   const el=$('#v-'+v); if(el) el.classList.add('active');
@@ -605,10 +627,13 @@ function go(v){
 }
 function rerender(){
   if(!session){ return; }
+  if(currentView==='assign') keepTitle(); // don't lose half-typed input to a background sync
+  if(currentView==='mine'&&$('#mTitle')) window._mTitle=$('#mTitle').value;
   renderNav();
   const r={chase:renderChase,tasks:renderTasks,assign:renderAssign,contacts:renderContacts,dash:renderDash,
     mytasks:renderMyTasks,admin:renderAdmin,mine:renderMine}[currentView];
   if(r) r();
+  if(currentView==='mine'&&window._mTitle&&$('#mTitle')) $('#mTitle').value=window._mTitle;
 }
 
 /* ================= shared task card ================= */
@@ -631,7 +656,7 @@ function taskCard(t,opts={}){
   if(!opts.noActions){
     if(admin){
       const waBtn=c? (c.phoneOk?`<button class="ic wa" onclick="waSingle('${t.id}')">📤 WhatsApp</button>`
-          :`<button class="ic disabled" onclick="toast('Fix ${esc(c.name.split(' ')[0])}\\'s number first')">📤 WhatsApp</button>`)
+          :`<button class="ic disabled" onclick="toast('Fix the number for ${jsEsc(c.name.split(' ')[0])} first')">📤 WhatsApp</button>`)
         :`<button class="ic" style="border-color:var(--accent);color:var(--accent-ink)" onclick="openTaskSheet('${t.id}')">👤 Assign</button>`;
       if(t.status==='open') actions=`${waBtn}<button class="ic" onclick="setStatus('${t.id}','inprogress')">▶ Start</button><button class="ic" onclick="setStatus('${t.id}','done')">✓ Done</button>`;
       else if(t.status==='inprogress') actions=`${waBtn}<button class="ic" onclick="setStatus('${t.id}','done')">✓ Done</button>`;
@@ -653,8 +678,26 @@ function taskCard(t,opts={}){
     ${actions?`<div class="task-actions">${actions}</div>`:''}
   </div>`;
 }
-function setStatus(id,to){ mutate([{t:'status',id,to}]); if(to==='done') toast('Done ✓','ok'); }
-function verifyTask(id){ mutate([{t:'status',id,to:'done'}]); toast('Verified ✓','ok'); }
+function nextDate(d,rep){ const x=new Date(d);
+  if(rep==='weekly') x.setDate(x.getDate()+7);
+  else if(rep==='monthly') x.setMonth(x.getMonth()+1);
+  else if(rep==='quarterly') x.setMonth(x.getMonth()+3);
+  else if(rep==='yearly') x.setFullYear(x.getFullYear()+1);
+  return x; }
+let _lastStatusTap={id:null,ts:0};
+function setStatus(id,to,label){
+  if(_lastStatusTap.id===id&&Date.now()-_lastStatusTap.ts<700) return; // swallow double-taps on swapped-in buttons
+  _lastStatusTap={id,ts:Date.now()};
+  const t=db.tasks.find(x=>x.id===id);
+  const op={t:'status',id,to};
+  if(to==='done'&&t&&t.repeat&&t.repeat!=='none'&&t.deadline){
+    op.roll=true; op.nextDeadline=toLocalInput(nextDate(t.deadline,t.repeat));
+    mutate([op]); toast((label||'Done')+' ✓ — next due '+fmtDue(op.nextDeadline),'ok'); return;
+  }
+  mutate([op]);
+  if(to==='done') toast((label||'Done')+' ✓','ok');
+}
+function verifyTask(id){ setStatus(id,'done','Verified'); }
 function memberDone(id){
   const t=db.tasks.find(x=>x.id===id);
   showModal2(`<h3>Mark "${esc(t.title)}" as done?</h3>
@@ -1153,7 +1196,7 @@ function renderContactListOnly(){
       <div class="cc-actions">
         ${c.phoneOk&&open.length?`<button class="ic wa" style="flex:2" onclick="remindAll('${c.id}')">📤 Remind all (${open.length})</button>`
           :`<button class="ic disabled" style="flex:2">📤 Remind all</button>`}
-        <button class="ic" onclick="fGroup='all';fMisc='all';taskSearch='${esc(c.name)}';go('tasks')">📋 Tasks</button>
+        <button class="ic" onclick="fGroup='all';fMisc='all';taskSearch='${jsEsc(c.name)}';go('tasks')">📋 Tasks</button>
       </div></div>`;
   }).join('');
   el.innerHTML=html;
@@ -1164,7 +1207,7 @@ function openContactSheet(id){
     <div style="margin-top:8px">
       <div class="rowitem" onclick="openEditContact('${id}')"><span class="ri-ic">✎</span><div class="ri-main"><div class="ri-t">Edit contact</div></div><span class="ri-x">›</span></div>
       <div class="rowitem" onclick="openAddMembership('${id}')"><span class="ri-ic">🏢</span><div class="ri-main"><div class="ri-t">Add to another company</div></div><span class="ri-x">›</span></div>
-      <div class="rowitem" onclick="navigator.clipboard&&navigator.clipboard.writeText('${esc(c.phone)}');toast('Number copied','ok')"><span class="ri-ic">📋</span><div class="ri-main"><div class="ri-t">Copy number</div></div><span class="ri-x">›</span></div>
+      <div class="rowitem" onclick="navigator.clipboard&&navigator.clipboard.writeText('${jsEsc(c.phone)}');toast('Number copied','ok')"><span class="ri-ic">📋</span><div class="ri-main"><div class="ri-t">Copy number</div></div><span class="ri-x">›</span></div>
     </div>
     <div class="danger-row" onclick="confirmDeleteContact('${id}')">🗑 Delete contact</div>
     <div class="sheet-actions"><button class="btn ghost" onclick="closeModal()">Close</button></div>`);
@@ -1187,9 +1230,12 @@ function saveContactEdit(id){
   closeModal(); mutate([{t:'upsert',col:'contacts',rec}]); toast('Updated','ok');
 }
 function dropMembership(cid,gid){
+  const typedName=$('#ecName')?$('#ecName').value:null, typedPhone=$('#ecPhone')?$('#ecPhone').value:null;
   const c=contactById(cid);
   mutate([{t:'upsert',col:'contacts',rec:{...c,memberships:(c.memberships||[]).filter(m=>m.groupId!==gid),updatedAt:Date.now()}}]);
   openEditContact(cid);
+  if(typedName!==null&&$('#ecName')) $('#ecName').value=typedName;
+  if(typedPhone!==null&&$('#ecPhone')){ $('#ecPhone').value=typedPhone; phonePreview('ecPhone','ecPrev'); }
 }
 function openAddMembership(cid){
   const c=contactById(cid);
@@ -1254,8 +1300,10 @@ function saveNewGroup(){
   toast('Added','ok');
 }
 async function loadPhonebook(){
+  const typed={name:$('#apName')?$('#apName').value:'',phone:$('#apPhone')?$('#apPhone').value:''};
+  const grp=$('#apGroup')?$('#apGroup').value:null;
   try{ const r=await api('/phonebook'); phonebook=r.phonebook; toast(phonebook.length+' contacts available','ok');
-    closeModal(); openAddContact(); }
+    closeModal(); openAddContact(typed.name||typed.phone?typed:null,grp); }
   catch(e){ toast(e.message,'err'); }
 }
 let pbLast=[];
@@ -1326,7 +1374,8 @@ function renderMyTasks(){
 
 /* ================= ADMIN: STAFF LOGINS ================= */
 function genPassword(){ const w='abcdefghjkmnpqrstuvwxyz23456789'; let p='';
-  for(let i=0;i<8;i++){ p+=w[Math.floor(Math.random()*w.length)]; if(i===3)p+='-'; } return p; }
+  const r=new Uint32Array(10); crypto.getRandomValues(r);
+  for(let i=0;i<10;i++){ p+=w[r[i]%w.length]; if(i===4)p+='-'; } return p; }
 function renderAdmin(){
   const users=db.users||[];
   header('Staff logins',`${users.filter(u=>!u.disabled).length} active · ${users.filter(u=>u.disabled).length} disabled`,
@@ -1455,6 +1504,7 @@ function renderMine(){
 }
 function saveMine(){
   const title=$('#mTitle').value.trim(); if(!title){ toast('Enter a task'); return; }
+  window._mTitle='';
   mutate([{t:'upsert',col:'personal',rec:{id:uid(),title,deadline:$('#mDeadline').value||null,priority:$('#mPrio').value,status:'open',createdAt:Date.now(),updatedAt:Date.now()}}]);
   toast('Added','ok');
 }
@@ -1483,7 +1533,7 @@ function openMore(){
     <div style="border-top:1px solid var(--line);margin:6px 0"></div>
     <div class="rowitem" style="cursor:default"><span class="ri-ic">🔄</span><div class="ri-main"><div class="ri-t" style="font-weight:500;font-size:0.82rem;color:var(--ink-3)">
       ${syncState==='offline'?'Offline — '+outbox.length+' pending':syncState==='pending'?'Syncing '+outbox.length+'…':'Synced'}</div></div></div>
-    <div class="danger-row" onclick="closeModal();logout()">🚪 Log out</div>
+    <div class="danger-row" onclick="closeModal();confirmLogout()">🚪 Log out</div>
     <div style="text-align:center;font-size:0.7rem;color:var(--ink-4);margin-top:16px">JMS Chief-of-Staff v2.0</div>`);
 }
 async function doExport(){
@@ -1580,9 +1630,19 @@ function showModal2(html){ $('#sheet2').innerHTML=html; $('#modal2').classList.a
 function closeModal2(){ $('#modal2').classList.remove('show'); }
 $('#modal').onclick=e=>{ if(e.target.id==='modal') closeModal(); };
 $('#modal2').onclick=e=>{ if(e.target.id==='modal2') closeModal2(); };
-window.addEventListener('popstate',()=>{
+let _lastBackTs=0;
+window.addEventListener('popstate',(e)=>{
   if($('#modal2').classList.contains('show')){ closeModal2(); history.pushState({},''); return; }
   if($('#modal').classList.contains('show')){ closeModal(); history.pushState({},''); return; }
+  if(e.state&&e.state.v&&session){ // back navigates between views
+    currentView=e.state.v;
+    document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));
+    const el=$('#v-'+e.state.v); if(el) el.classList.add('active');
+    hideActionbar(); rerender(); window.scrollTo(0,0); return;
+  }
+  if(Date.now()-_lastBackTs<2000) return; // second back within 2s: let the browser exit
+  _lastBackTs=Date.now(); toast('Press back again to exit');
+  history.pushState({},'');
 });
 history.pushState({},'');
 

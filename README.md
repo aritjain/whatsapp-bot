@@ -10,14 +10,16 @@ One static page (`index.html`) + one Netlify Function (`netlify/functions/api.mj
 - **Contacts, not per-company rows** — one person can belong to many companies. "Remind all" sends ONE WhatsApp message covering all their pending work, grouped by company, with notes and "pending N days", signed by whoever sent it.
 - **Chase Queue** — the app opens on who-owes-you-what, worst first. Tick people, send reminders one-by-one through a stepper, and each send is recorded (`reminded 3×, last 2d ago`). People reminded today grey out.
 - **Verify-close** — staff mark a task done → it goes to *Awaiting verify* → admin confirms. Every task keeps an append-only activity log (created / assigned / status / reminded / verified / comments) written server-side.
-- **Server is the system of record** — the phone is just a cache. Works offline, syncs when back. Daily automatic backups in Blobs (last 30 kept).
+- **Server is the system of record** — the phone is just a cache. Works offline, syncs when back. Daily + pre-import snapshots are kept in Blobs (last 30) as a safety net, but restoring one is a manual operation — so also tap **More → Export backup** weekly and keep the file somewhere off Netlify.
+- **Login protection** — server-side password floors (10+ admin, 8+ staff), 10-minute lockout after 5 failed attempts, and password reset / disable instantly revokes that user's existing sessions.
 
 ## Deploy (one time, ~5 minutes)
 
 1. **Netlify → Add new site → Import an existing project → GitHub** → pick this repo.
 2. Set the **production branch** to the branch you want to serve (e.g. `main` after merging).
    Build command: *(leave empty)* · Publish directory: `.` — `netlify.toml` handles the rest.
-3. Deploy. Netlify installs `@netlify/blobs` and wires `/api/*` automatically. No environment variables needed (an auth secret is generated and stored in Blobs on first run; set `JMS_AUTH_SECRET` only if you ever want to force one).
+3. **Site configuration → Build & deploy → turn Deploy Previews OFF and Branch deploys to "None"** (or production branch only). This repo is public — the API refuses to serve non-production deploys as a code-level backstop, but turn the previews off anyway so PR builds never exist.
+4. Deploy. Netlify installs `@netlify/blobs` and wires `/api/*` automatically. No environment variables needed (an auth secret is generated and stored in Blobs on first run; set `JMS_AUTH_SECRET` only if you ever want to force one).
 
 ## First run
 

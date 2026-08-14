@@ -11,6 +11,7 @@ import {
 /* ---------------- store ---------------- */
 const DOCS = {
   config: 'meta/config',
+  loginFail: 'meta/login-failures',
   users: 'users',
   groups: 'data/groups',
   contacts: 'data/contacts',
@@ -101,7 +102,7 @@ function hmac(payload, secret) { return createHmac('sha256', secret).update(payl
 
 async function signToken(user) {
   const secret = await getSecret();
-  const payload = b64u({ uid: user.id, role: user.role, exp: Date.now() + 30 * 24 * 3600 * 1000 });
+  const payload = b64u({ uid: user.id, role: user.role, tv: user.tokenVersion || 0, exp: Date.now() + 30 * 24 * 3600 * 1000 });
   return payload + '.' + hmac(payload, secret);
 }
 async function verifyToken(token) {
@@ -140,7 +141,28 @@ async function requireAuth(req) {
   const users = await readDoc(DOCS.users, []);
   const user = users.find((u) => u.id === claims.uid);
   if (!user || user.disabled) return null;
+  if ((claims.tv || 0) !== (user.tokenVersion || 0)) return null; // revoked by reset/disable
   return user;
+}
+
+/* login throttling: 5 failures per phone → 10-minute lock */
+async function loginLocked(np) {
+  const fails = await readDoc(DOCS.loginFail, {});
+  const f = fails[np];
+  return !!(f && f.n >= 5 && Date.now() < f.until);
+}
+async function recordLoginFail(np) {
+  await casWrite(DOCS.loginFail, {}, (fails) => {
+    const f = fails[np] || { n: 0, lastAt: 0, until: 0 };
+    f.n = (Date.now() - f.lastAt < 3600000 ? f.n : 0) + 1;
+    f.lastAt = Date.now();
+    if (f.n >= 5) f.until = Date.now() + 10 * 60 * 1000;
+    fails[np] = f;
+    return fails;
+  });
+}
+async function clearLoginFail(np) {
+  await casWrite(DOCS.loginFail, {}, (fails) => { delete fails[np]; return fails; });
 }
 
 const safeUser = (u) => ({
@@ -149,12 +171,14 @@ const safeUser = (u) => ({
 });
 
 /* ---------------- backups ---------------- */
-async function ensureDailyBackup() {
+async function ensureDailyBackup(forceKeySuffix) {
   try {
     const day = new Date().toISOString().slice(0, 10);
-    const key = 'backup/' + day;
-    const existing = await readDoc(key, null);
-    if (existing) return;
+    const key = 'backup/' + day + (forceKeySuffix || '');
+    if (!forceKeySuffix) {
+      const existing = await readDoc(key, null);
+      if (existing) return;
+    }
     const [users, groups, contacts, tasks, personal, phonebook] = await Promise.all([
       readDoc(DOCS.users, []), readDoc(DOCS.groups, []), readDoc(DOCS.contacts, []),
       readDoc(DOCS.tasks, []), readDoc(DOCS.personal, []), readDoc(DOCS.phonebook, []),
@@ -215,7 +239,7 @@ const ADMIN_COLS = { groups: DOCS.groups, contacts: DOCS.contacts, tasks: DOCS.t
 async function handlePush(req, user) {
   let body;
   try { body = await req.json(); } catch { return json({ error: 'Bad JSON' }, 400); }
-  const ops = Array.isArray(body.ops) ? body.ops : [];
+  const ops = Array.isArray(body.ops) ? body.ops.slice(0, 200) : [];
   if (!ops.length) return syncResponse(user);
   await ensureDailyBackup();
   const rejected = [];
@@ -282,7 +306,11 @@ async function handlePush(req, user) {
         } else if (op.t === 'upsert') {
           const rec = op.rec || {};
           if (!rec.id) { rejected.push({ i, reason: 'no id' }); continue; }
-          if (old && (old.updatedAt || 0) > (rec.updatedAt || 0)) { rejected.push({ i, reason: 'stale' }); continue; }
+          // LWW with tolerance: server stamps updatedAt with its own clock while
+          // clients stamp with theirs, so only reject writes that are stale by
+          // more than 5 minutes (a genuinely old offline edit), not by the
+          // debounce window or minor clock skew.
+          if (old && (old.updatedAt || 0) - (rec.updatedAt || 0) > 300000) { rejected.push({ i, reason: 'stale' }); continue; }
           const clean = {
             id: rec.id,
             title: String(rec.title || '').slice(0, 500),
@@ -327,7 +355,7 @@ async function handlePush(req, user) {
         if (op.t === 'delete') { if (idx >= 0) docs.splice(idx, 1); continue; }
         const rec = { ...op.rec };
         if (!rec.id) { rejected.push({ i, reason: 'no id' }); continue; }
-        if (idx >= 0 && (docs[idx].updatedAt || 0) > (rec.updatedAt || 0)) { rejected.push({ i, reason: 'stale' }); continue; }
+        if (idx >= 0 && (docs[idx].updatedAt || 0) - (rec.updatedAt || 0) > 300000) { rejected.push({ i, reason: 'stale' }); continue; }
         if (col === 'contacts') {
           rec.normPhone = normPhone(rec.phone);
           rec.phoneOk = phoneOk(rec.phone);
@@ -430,7 +458,8 @@ async function handleImport(req, user) {
   try { body = await req.json(); } catch { return json({ error: 'Bad JSON' }, 400); }
   const data = body.data || body;
   if (!data || !Array.isArray(data.groups)) return json({ error: 'Not a valid backup file' }, 400);
-  await ensureDailyBackup();
+  // full snapshot immediately before every import, not just the daily one
+  await ensureDailyBackup('-preimport-' + new Date().toISOString().slice(11, 19).replace(/:/g, ''));
   const incoming = isV1Shape(data) ? migrateV1(data) : {
     groups: data.groups || [], contacts: data.contacts || [], tasks: data.tasks || [],
     personal: data.personal || [], phonebook: data.phonebook || [],
@@ -526,7 +555,7 @@ async function handleUsers(req, user) {
   if (action === 'create') {
     const np = normPhone(body.phone);
     if (!body.name || !np) error = 'Name and valid phone required';
-    else if (String(body.password || '').length < 4) error = 'Password must be at least 4 characters';
+    else if (String(body.password || '').length < 8) error = 'Password must be at least 8 characters';
     else if (users.some((u) => u.normPhone === np)) error = 'A user with this phone already exists';
     if (error) return json({ error }, 400);
     let contactId = body.contactId || null;
@@ -560,8 +589,11 @@ async function handleUsers(req, user) {
       const t = cur.find((u) => u.id === body.userId);
       if (!t) return cur;
       if (action === 'resetPassword') {
-        if (String(body.password || '').length >= 4) t.hash = hashPassword(body.password);
-      } else if (action === 'disable') t.disabled = true;
+        if (String(body.password || '').length >= 8) {
+          t.hash = hashPassword(body.password);
+          t.tokenVersion = (t.tokenVersion || 0) + 1; // revoke existing sessions
+        }
+      } else if (action === 'disable') { t.disabled = true; t.tokenVersion = (t.tokenVersion || 0) + 1; }
       else if (action === 'enable') t.disabled = false;
       else if (action === 'update') {
         if (body.name) t.name = body.name;
@@ -581,6 +613,15 @@ export default async function handler(req) {
   path = path.replace(/^\/\.netlify\/functions\/api/, '').replace(/^\/api/, '') || '/';
   const method = req.method.toUpperCase();
 
+  // Deploy previews of a public repo must never reach the live store: an
+  // attacker's PR could ship its own function code. Only production (and
+  // local `netlify dev`) may serve the API; set JMS_ALLOW_NONPROD=1 to
+  // deliberately open branch deploys.
+  const ctx = process.env.CONTEXT;
+  if (ctx && ctx !== 'production' && ctx !== 'dev' && !process.env.JMS_ALLOW_NONPROD) {
+    return json({ error: 'API disabled outside production deploys' }, 403);
+  }
+
   try {
     if (path === '/ping') return json({ ok: true, ts: Date.now() });
 
@@ -596,7 +637,7 @@ export default async function handler(req) {
       if (users.length) return json({ error: 'Already set up' }, 409);
       const np = normPhone(body.phone);
       if (!body.name || !np) return json({ error: 'Name and valid phone required' }, 400);
-      if (String(body.password || '').length < 6) return json({ error: 'Password must be at least 6 characters' }, 400);
+      if (String(body.password || '').length < 10) return json({ error: 'Admin password must be at least 10 characters' }, 400);
       await getSecret();
       const admin = {
         id: uid(), name: body.name, phone: body.phone, normPhone: np, role: 'admin',
@@ -615,10 +656,13 @@ export default async function handler(req) {
       const users = await readDoc(DOCS.users, []);
       if (!users.length) return json({ error: 'Not set up yet', bootstrapped: false }, 401);
       const np = normPhone(body.phone);
+      if (await loginLocked(np)) return json({ error: 'Too many attempts — try again in 10 minutes', bootstrapped: true }, 429);
       const user = users.find((u) => u.normPhone === np);
       if (!user || user.disabled || !verifyPassword(body.password, user.hash)) {
+        await recordLoginFail(np);
         return json({ error: 'Phone number or password incorrect', bootstrapped: true }, 401);
       }
+      await clearLoginFail(np);
       return json({ token: await signToken(user), user: safeUser(user) });
     }
 
